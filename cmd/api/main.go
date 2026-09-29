@@ -16,10 +16,15 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	environment := envOrDefault("APP_ENV", "development")
+	version := envOrDefault("APP_VERSION", "dev")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With(
+		"environment", environment,
+		"version", version,
+	)
 	server := &http.Server{
 		Addr:              envOrDefault("STORE_API_ADDR", ":8443"),
-		Handler:           httpapi.NewHandler(logger),
+		Handler:           httpapi.NewHandler(logger, environment, version),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

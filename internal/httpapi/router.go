@@ -14,16 +14,18 @@ type responseEnvelope struct {
 }
 
 type testResponse struct {
-	Service string `json:"service"`
-	Status  string `json:"status"`
-	Scheme  string `json:"scheme"`
+	Service     string `json:"service"`
+	Status      string `json:"status"`
+	Scheme      string `json:"scheme"`
+	Environment string `json:"environment"`
+	Version     string `json:"version"`
 }
 
 // NewHandler returns the HTTP surface for the store API.
-func NewHandler(logger *slog.Logger) http.Handler {
+func NewHandler(logger *slog.Logger, environment string, version string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", getOnly(healthHandler))
-	mux.HandleFunc("/api/v1/test", getOnly(testHandler))
+	mux.HandleFunc("/api/v1/test", getOnly(testHandler(environment, version)))
 	mux.HandleFunc("/", notFoundHandler)
 	return requestMiddleware(logger, mux)
 }
@@ -38,20 +40,24 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func testHandler(w http.ResponseWriter, r *http.Request) {
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+func testHandler(environment string, version string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		writeJSON(w, http.StatusOK, responseEnvelope{
+			Code:    0,
+			Message: "ok",
+			Data: testResponse{
+				Service:     "onebeat-store-api",
+				Status:      "ready",
+				Scheme:      scheme,
+				Environment: environment,
+				Version:     version,
+			},
+		})
 	}
-	writeJSON(w, http.StatusOK, responseEnvelope{
-		Code:    0,
-		Message: "ok",
-		Data: testResponse{
-			Service: "onebeat-store-api",
-			Status:  "ready",
-			Scheme:  scheme,
-		},
-	})
 }
 
 func notFoundHandler(w http.ResponseWriter, _ *http.Request) {

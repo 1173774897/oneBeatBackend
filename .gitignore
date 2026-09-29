@@ -1,3 +1,5 @@
 /certs/*.pem
 /bin/
 *.log
+.env
+.env.*

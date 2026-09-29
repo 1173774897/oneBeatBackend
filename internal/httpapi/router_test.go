@@ -44,7 +44,8 @@ func TestTestEndpointOverHTTPS(t *testing.T) {
 	if err := json.Unmarshal(envelope.Data, &data); err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
-	if data.Service != "onebeat-store-api" || data.Status != "ready" || data.Scheme != "https" {
+	if data.Service != "onebeat-store-api" || data.Status != "ready" || data.Scheme != "https" ||
+		data.Environment != "test" || data.Version != "test-version" {
 		t.Fatalf("unexpected data: %+v", data)
 	}
 }
@@ -78,5 +79,5 @@ func TestUnknownEndpointReturnsJSON(t *testing.T) {
 }
 
 func newTestHandler() http.Handler {
-	return NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), "test", "test-version")
 }

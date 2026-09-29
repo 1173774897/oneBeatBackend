@@ -29,7 +29,9 @@ curl -k https://localhost:8443/healthz
   "data": {
     "service": "onebeat-store-api",
     "status": "ready",
-    "scheme": "https"
+    "scheme": "https",
+    "environment": "development",
+    "version": "dev"
   }
 }
 ```
@@ -42,6 +44,8 @@ curl -k https://localhost:8443/healthz
 | `STORE_API_TLS_CERT` | `certs/dev-cert.pem` | TLS 证书路径 |
 | `STORE_API_TLS_KEY` | `certs/dev-key.pem` | TLS 私钥路径 |
 | `STORE_API_INSECURE_HTTP` | 未设置 | 仅当值为 `1` 时启用明文 HTTP |
+| `APP_ENV` | `development` | 运行环境标识 |
+| `APP_VERSION` | `dev` | 构建版本，CI 中为提交短 SHA |
 
 若只是排查本机网络，可临时使用明文模式：
 
@@ -58,3 +62,22 @@ go test ./...
 ```
 
 接口测试使用内存中的真实 TLS 服务，能够验证 HTTPS 请求、响应结构、方法限制和安全响应头。
+
+## Docker
+
+```bash
+docker build \
+  --build-arg APP_ENV=test \
+  --build-arg APP_VERSION=local \
+  -t onebeat:test .
+```
+
+镜像默认从 `/certs/fullchain.pem` 和 `/certs/privkey.pem` 加载 HTTPS 证书，并以非 root
+用户运行。
+
+## GitHub CI/CD
+
+`master` 自动构建并发布生产镜像到 `443`，`staging` 自动构建并发布测试镜像到
+`8443`。镜像存储在 GitHub Container Registry。Vultr 初始化、GitHub Secrets、证书权限、
+验证和回滚步骤见
+[部署文档](docs/deployment.md)。

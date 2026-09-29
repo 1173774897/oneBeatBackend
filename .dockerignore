@@ -1,0 +1,10 @@
+.git
+.gitignore
+.github/
+.DS_Store
+certs/
+deploy/
+docs/
+bin/
+*.log
+README.md
