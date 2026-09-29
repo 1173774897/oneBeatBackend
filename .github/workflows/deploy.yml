@@ -9,7 +9,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: 1173774897/onebeatbackend
-  DEPLOY_ROOT: /opt/onebeat
+  DEPLOY_ROOT: /opt/onebeatbackend
 
 jobs:
   build:
@@ -91,7 +91,7 @@ jobs:
       cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.SSH_HOST }}
-      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_USER: onebeat
       SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
       SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
       SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
