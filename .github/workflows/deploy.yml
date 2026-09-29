@@ -87,7 +87,8 @@ jobs:
     environment:
       name: ${{ needs.build.outputs.environment }}
     concurrency:
-      group: onebeat-${{ needs.build.outputs.environment }}
+      # Production and testing share one PostgreSQL container and deployment directory.
+      group: onebeat-server-deploy
       cancel-in-progress: false
     env:
       SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -113,7 +114,20 @@ jobs:
           chmod 600 "$HOME/.ssh/deploy_key"
           chmod 644 "$HOME/.ssh/known_hosts"
 
-      - name: Upload Compose configuration
+      - name: Prepare deployment directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh \
+            -i "$HOME/.ssh/deploy_key" \
+            -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "install -d -m 755 '$DEPLOY_ROOT' '$DEPLOY_ROOT/migrations' '$DEPLOY_ROOT/postgres/init'"
+
+      - name: Upload deployment configuration and migrations
         shell: bash
         run: |
           set -euo pipefail
@@ -125,6 +139,30 @@ jobs:
             -o StrictHostKeyChecking=yes \
             "deploy/${{ needs.build.outputs.compose_file }}" \
             "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}.next"
+          scp \
+            -i "$HOME/.ssh/deploy_key" \
+            -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "deploy/docker-compose.database.yml" \
+            "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/docker-compose.database.yml.next"
+          scp \
+            -i "$HOME/.ssh/deploy_key" \
+            -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "deploy/postgres/init/01-create-environment-databases.sh" \
+            "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh.next"
+          scp \
+            -i "$HOME/.ssh/deploy_key" \
+            -P "$SSH_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            migrations/*.sql \
+            "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/migrations/"
 
       - name: Pull and deploy
         shell: bash
@@ -139,7 +177,21 @@ jobs:
             "$SSH_USER@$SSH_HOST" "
               set -eu
               mv '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}.next' '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}'
+              mv '$DEPLOY_ROOT/docker-compose.database.yml.next' '$DEPLOY_ROOT/docker-compose.database.yml'
+              mv '$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh.next' '$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh'
+              chmod 755 '$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh'
+              test -s '$DEPLOY_ROOT/.env.database' || {
+                echo 'Missing $DEPLOY_ROOT/.env.database; create the server-side database secrets first.' >&2
+                exit 1
+              }
+              test -s '$DEPLOY_ROOT/.env.${{ needs.build.outputs.app_env }}' || {
+                echo 'Missing $DEPLOY_ROOT/.env.${{ needs.build.outputs.app_env }}; create the environment DATABASE_URL first.' >&2
+                exit 1
+              }
               export ONEBEAT_IMAGE='$REGISTRY/$IMAGE_NAME:${{ needs.build.outputs.image_tag }}'
-              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' pull
+              docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' pull
+              docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' up -d --wait --wait-timeout 90
+              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration pull
+              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration run --rm migrate
               docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' up -d --remove-orphans --wait --wait-timeout 60
             "

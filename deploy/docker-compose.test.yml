@@ -8,6 +8,8 @@ services:
     init: true
     ports:
       - "8443:8443"
+    env_file:
+      - ./.env.test
     environment:
       APP_ENV: "test"
       STORE_API_ADDR: ":8443"
@@ -16,6 +18,8 @@ services:
     volumes:
       - ./certs/test:/certs:ro
       - ./data/test:/data
+    networks:
+      - onebeat-backend
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -36,3 +40,30 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  migrate:
+    image: migrate/migrate:v4.19.1
+    profiles:
+      - migration
+    restart: "no"
+    env_file:
+      - ./.env.test
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - 'exec migrate -path=/migrations -database "$$DATABASE_URL" up'
+    volumes:
+      - ./migrations:/migrations:ro
+    networks:
+      - onebeat-backend
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  onebeat-backend:
+    external: true
+    name: onebeat-backend

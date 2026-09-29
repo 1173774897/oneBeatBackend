@@ -1,0 +1,40 @@
+name: onebeat-database
+
+services:
+  postgres:
+    image: postgres:17.11-alpine
+    container_name: onebeat-postgres
+    restart: unless-stopped
+    init: true
+    shm_size: 128mb
+    ports:
+      - "127.0.0.1:5432:5432"
+    env_file:
+      - ./.env.database
+    environment:
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --data-checksums"
+    volumes:
+      - onebeat-postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - onebeat-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  onebeat-backend:
+    name: onebeat-backend
+
+volumes:
+  onebeat-postgres-data:
+    name: onebeat-postgres-data

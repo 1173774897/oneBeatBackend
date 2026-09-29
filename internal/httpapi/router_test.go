@@ -1,18 +1,37 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"onebeat/store-api/internal/database"
 )
 
 type decodedEnvelope struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
+}
+
+type fakeDatabase struct {
+	pingError   error
+	status      database.Status
+	statusError error
+}
+
+func (f *fakeDatabase) Ping(context.Context) error {
+	return f.pingError
+}
+
+func (f *fakeDatabase) Status(context.Context) (database.Status, error) {
+	return f.status, f.statusError
 }
 
 func TestTestEndpointOverHTTPS(t *testing.T) {
@@ -64,6 +83,47 @@ func TestTestEndpointRejectsPost(t *testing.T) {
 	}
 }
 
+func TestDatabaseEndpointReturnsConnectionDetails(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/database/test", nil)
+	recorder := httptest.NewRecorder()
+
+	newTestHandler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var envelope decodedEnvelope
+	if err := json.NewDecoder(recorder.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var data databaseResponse
+	if err := json.Unmarshal(envelope.Data, &data); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	if data.Status != "connected" || data.Database != "onebeat_test" ||
+		data.User != "onebeat_test" || data.MigrationVersion != 1 || data.MigrationDirty {
+		t.Fatalf("unexpected database status: %+v", data)
+	}
+}
+
+func TestHealthEndpointFailsWhenDatabaseIsUnavailable(t *testing.T) {
+	handler := NewHandler(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test",
+		"test-version",
+		&fakeDatabase{pingError: errors.New("database unavailable")},
+	)
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+}
+
 func TestUnknownEndpointReturnsJSON(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/missing", nil)
 	recorder := httptest.NewRecorder()
@@ -79,5 +139,15 @@ func TestUnknownEndpointReturnsJSON(t *testing.T) {
 }
 
 func newTestHandler() http.Handler {
-	return NewHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), "test", "test-version")
+	return NewHandler(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test",
+		"test-version",
+		&fakeDatabase{status: database.Status{
+			Name:             "onebeat_test",
+			User:             "onebeat_test",
+			ServerTime:       time.Date(2026, time.September, 29, 12, 0, 0, 0, time.UTC),
+			MigrationVersion: 1,
+		}},
+	)
 }

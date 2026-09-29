@@ -1,11 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"onebeat/store-api/internal/database"
 )
+
+const databaseRequestTimeout = 3 * time.Second
 
 type responseEnvelope struct {
 	Code    int         `json:"code"`
@@ -21,23 +26,52 @@ type testResponse struct {
 	Version     string `json:"version"`
 }
 
-// NewHandler returns the HTTP surface for the store API..
-func NewHandler(logger *slog.Logger, environment string, version string) http.Handler {
+type databaseResponse struct {
+	Status           string    `json:"status"`
+	Database         string    `json:"database"`
+	User             string    `json:"user"`
+	ServerTime       time.Time `json:"serverTime"`
+	MigrationVersion int64     `json:"migrationVersion"`
+	MigrationDirty   bool      `json:"migrationDirty"`
+}
+
+type databaseStore interface {
+	Ping(context.Context) error
+	Status(context.Context) (database.Status, error)
+}
+
+// NewHandler returns the HTTP surface for the store API.
+func NewHandler(logger *slog.Logger, environment string, version string, store databaseStore) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", getOnly(healthHandler))
+	mux.HandleFunc("/healthz", getOnly(healthHandler(logger, store)))
 	mux.HandleFunc("/api/v1/test", getOnly(testHandler(environment, version)))
+	mux.HandleFunc("/api/v1/database/test", getOnly(databaseTestHandler(logger, store)))
 	mux.HandleFunc("/", notFoundHandler)
 	return requestMiddleware(logger, mux)
 }
 
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, responseEnvelope{
-		Code:    0,
-		Message: "ok",
-		Data: map[string]string{
-			"status": "healthy",
-		},
-	})
+func healthHandler(logger *slog.Logger, store databaseStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), databaseRequestTimeout)
+		defer cancel()
+		if err := store.Ping(ctx); err != nil {
+			logger.Error("database health check failed", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{
+				Code:    50301,
+				Message: "database unavailable",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, responseEnvelope{
+			Code:    0,
+			Message: "ok",
+			Data: map[string]string{
+				"status":   "healthy",
+				"database": "connected",
+			},
+		})
+	}
 }
 
 func testHandler(environment string, version string) http.HandlerFunc {
@@ -55,6 +89,36 @@ func testHandler(environment string, version string) http.HandlerFunc {
 				Scheme:      scheme,
 				Environment: environment,
 				Version:     version,
+			},
+		})
+	}
+}
+
+func databaseTestHandler(logger *slog.Logger, store databaseStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), databaseRequestTimeout)
+		defer cancel()
+
+		status, err := store.Status(ctx)
+		if err != nil {
+			logger.Error("database test failed", "error", err)
+			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{
+				Code:    50302,
+				Message: "database test failed",
+			})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, responseEnvelope{
+			Code:    0,
+			Message: "ok",
+			Data: databaseResponse{
+				Status:           "connected",
+				Database:         status.Name,
+				User:             status.User,
+				ServerTime:       status.ServerTime,
+				MigrationVersion: status.MigrationVersion,
+				MigrationDirty:   status.MigrationDirty,
 			},
 		})
 	}

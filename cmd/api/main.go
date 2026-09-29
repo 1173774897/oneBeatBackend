@@ -10,10 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"onebeat/store-api/internal/database"
 	"onebeat/store-api/internal/httpapi"
 )
 
-const shutdownTimeout = 10 * time.Second
+const (
+	databaseStartupTimeout = 15 * time.Second
+	shutdownTimeout        = 10 * time.Second
+)
 
 func main() {
 	environment := envOrDefault("APP_ENV", "development")
@@ -22,9 +26,20 @@ func main() {
 		"environment", environment,
 		"version", version,
 	)
+
+	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), databaseStartupTimeout)
+	store, err := database.Open(databaseContext, os.Getenv("DATABASE_URL"))
+	cancelDatabase()
+	if err != nil {
+		logger.Error("database startup check failed", "error", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+	logger.Info("database connection established")
+
 	server := &http.Server{
 		Addr:              envOrDefault("STORE_API_ADDR", ":8443"),
-		Handler:           httpapi.NewHandler(logger, environment, version),
+		Handler:           httpapi.NewHandler(logger, environment, version, store),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

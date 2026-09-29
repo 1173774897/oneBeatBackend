@@ -6,6 +6,7 @@
 - `staging`：构建 `test` 与 `test-<短 SHA>` 镜像，部署到 Vultr 的 `8443`。
 - Registry：`ghcr.io/1173774897/onebeatbackend`。
 - 服务器目录：`/opt/onebeatbackend`。
+- 数据库：一个 PostgreSQL 17 容器，内部隔离为 `onebeat_prod` 和 `onebeat_test` 两个逻辑库。
 
 工作流位于 `.github/workflows/deploy.yml`。GitHub Actions 使用仓库自带的
 `GITHUB_TOKEN` 推送 GHCR 镜像，然后通过 SSH 上传对应 Compose 文件并执行
@@ -443,7 +444,291 @@ openssl s_client \
 [Let’s Encrypt Challenge Types](https://letsencrypt.org/docs/challenge-types/)；Certbot 的 standalone
 模式和续期钩子可参考 [Certbot User Guide](https://eff-certbot.readthedocs.io/en/stable/using.html)。
 
-## 5. 配置 GitHub Actions Secrets
+## 5. 部署 PostgreSQL 与数据库迁移
+
+### 5.1 架构和安全边界
+
+数据库部署由 `deploy/docker-compose.database.yml` 管理：
+
+```text
+onebeat-prod ──┐
+               ├── onebeat-backend 私有 Docker 网络 ── onebeat-postgres
+onebeat-test ──┘                                      ├── onebeat_prod
+                                                      └── onebeat_test
+```
+
+- 只有一个 `onebeat-postgres` 容器和一个名为 `onebeat-postgres-data` 的持久卷。
+- 生产与测试使用不同数据库、不同登录账号和不同密码。
+- API 账号不是 PostgreSQL 超级用户，也不能创建数据库或角色。
+- 容器间通过 `onebeat-backend` 网络连接，连接地址是 `onebeat-postgres:5432`。
+- 宿主机只绑定 `127.0.0.1:5432`，便于 SSH 隧道调试；不要在 Vultr Firewall 或 UFW
+  中开放公网 `5432`。
+- Docker 内部连接使用 `sslmode=disable`，因为流量不离开同一台服务器的 Docker 网络；从开发
+  电脑调试时使用 SSH 加密隧道。
+
+两个逻辑库能防止测试数据误写入生产库，但它们仍共享同一个 PostgreSQL 进程、磁盘和故障域。
+这符合当前单机部署规模；以后需要独立扩缩容或更强隔离时，再迁移到两个实例或托管数据库。
+
+### 5.2 在服务器创建数据库密码文件
+
+数据库密码不进入 GitHub Secrets、Git 仓库、Docker 镜像或 Actions 日志。它们只保存在服务器
+`/opt/onebeatbackend` 下三个权限为 `600` 的文件中。
+
+在第一次推送包含数据库改动的代码之前，先以 `onebeat` 登录服务器：
+
+```bash
+ssh -i ~/.ssh/onebeat_github_actions onebeat@<Vultr-IP>
+cd /opt/onebeatbackend
+
+# 新建文件默认只允许当前用户读取，避免密码短暂以 644 权限落盘。
+umask 077
+
+# 十六进制密码只包含 URL 安全字符，可直接写入 PostgreSQL URL。
+ADMIN_PASSWORD="$(openssl rand -hex 32)"
+PROD_PASSWORD="$(openssl rand -hex 32)"
+TEST_PASSWORD="$(openssl rand -hex 32)"
+
+cat >.env.database <<EOF
+POSTGRES_USER=onebeat_admin
+POSTGRES_PASSWORD=${ADMIN_PASSWORD}
+POSTGRES_DB=postgres
+ONEBEAT_PROD_DB_USER=onebeat_prod
+ONEBEAT_PROD_DB_PASSWORD=${PROD_PASSWORD}
+ONEBEAT_TEST_DB_USER=onebeat_test
+ONEBEAT_TEST_DB_PASSWORD=${TEST_PASSWORD}
+EOF
+
+cat >.env.prod <<EOF
+DATABASE_URL=postgres://onebeat_prod:${PROD_PASSWORD}@onebeat-postgres:5432/onebeat_prod?sslmode=disable
+EOF
+
+cat >.env.test <<EOF
+DATABASE_URL=postgres://onebeat_test:${TEST_PASSWORD}@onebeat-postgres:5432/onebeat_test?sslmode=disable
+EOF
+
+chmod 600 .env.database .env.prod .env.test
+
+# 清除当前 shell 中的明文变量；文件中的值仍然保留。
+unset ADMIN_PASSWORD PROD_PASSWORD TEST_PASSWORD
+
+# 只检查所有者和权限，不要把文件内容输出到 Actions 或工单。
+ls -l .env.database .env.prod .env.test
+```
+
+三个文件应属于 `onebeat`，权限显示为 `-rw-------`。示例文件
+`deploy/.env.database.example`、`deploy/.env.prod.example` 和 `deploy/.env.test.example` 只用于说明
+格式，不能直接用于生产。
+
+`onebeat_admin` 仅用于数据库初始化、维护和备份。API 只会收到对应环境 `.env` 中的
+`DATABASE_URL`，不会拿到管理员密码。
+
+### 5.3 首次启动数据库
+
+服务器密码文件准备好后，优先向 `staging` 推送并观察测试环境：
+
+```bash
+git switch staging
+git push origin staging
+```
+
+新的 Actions 部署顺序是：
+
+1. 构建并推送 API 镜像。
+2. 上传数据库 Compose、初始化脚本、当前环境 Compose 和全部迁移文件。
+3. 验证服务器存在 `.env.database` 与当前环境的 `.env.test` 或 `.env.prod`。
+4. 启动并等待 `onebeat-postgres` 健康。
+5. 使用 `golang-migrate` 对当前环境数据库执行所有待执行的 `up` 迁移。
+6. 迁移成功后才启动或更新 API，并等待包含数据库检查的 `/healthz` 返回成功。
+
+第一次启动且数据卷为空时，官方 PostgreSQL 镜像会执行
+`postgres/init/01-create-environment-databases.sh`，一次性创建两个账号和两个数据库。初始化
+脚本只会对空数据目录执行；容器重启或重新创建不会清空数据库，也不会再次执行脚本。
+
+如果需要在 Actions 之外手工启动，可在服务器执行：
+
+```bash
+cd /opt/onebeatbackend
+
+docker compose \
+  -f docker-compose.database.yml \
+  up -d --wait --wait-timeout 90
+
+# 先用测试环境验证迁移。
+docker compose \
+  -f docker-compose.test.yml \
+  --profile migration \
+  run --rm migrate
+
+docker compose \
+  -f docker-compose.test.yml \
+  up -d --remove-orphans --wait --wait-timeout 60
+```
+
+不要为“重新运行初始化脚本”执行 `docker volume rm onebeat-postgres-data`。删除该卷会永久删除
+生产和测试数据。如果数据卷已经存在但数据库未正确创建，应先检查日志并手工修复，不要删除卷。
+
+### 5.4 验证容器、数据库和接口
+
+在服务器检查容器和逻辑库：
+
+```bash
+docker ps --filter name=onebeat
+docker logs --tail 100 onebeat-postgres
+
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d postgres \
+  -c "SELECT datname FROM pg_database WHERE datname IN ('onebeat_prod', 'onebeat_test') ORDER BY datname;"
+
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d onebeat_test \
+  -c "SELECT version, dirty FROM schema_migrations;"
+```
+
+预期能看到两个数据库，并且测试库迁移版本为 `1`、`dirty` 为 `false`。随后在开发电脑检查：
+
+```bash
+curl --fail https://api-test.example.com:8443/healthz
+curl --fail https://api-test.example.com:8443/api/v1/database/test
+```
+
+数据库测试接口不会返回密码或主机地址，成功响应类似：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "status": "connected",
+    "database": "onebeat_test",
+    "user": "onebeat_test",
+    "serverTime": "2026-09-29T12:00:00Z",
+    "migrationVersion": 1,
+    "migrationDirty": false
+  }
+}
+```
+
+生产部署后，`database` 和 `user` 应分别是 `onebeat_prod`。
+
+### 5.5 使用 DBeaver、DataGrip 或 TablePlus 调试
+
+不要把 PostgreSQL 的 `5432` 暴露到公网。Compose 已将它绑定到服务器回环地址
+`127.0.0.1:5432`，图形化工具通过 SSH 隧道即可访问。
+
+以 DBeaver/DataGrip 为例，新建 PostgreSQL 数据源：
+
+| 配置区域 | 字段 | 测试环境填写值 |
+| --- | --- | --- |
+| 数据库/Main | Host | `127.0.0.1` |
+| 数据库/Main | Port | `5432` |
+| 数据库/Main | Database | `onebeat_test` |
+| 数据库/Main | Username | `onebeat_test` |
+| 数据库/Main | Password | 服务器 `.env.database` 中对应的测试密码 |
+| SSH Tunnel | Host | Vultr IP 或 SSH 域名 |
+| SSH Tunnel | Port | 服务器 SSH 端口，通常为 `22` |
+| SSH Tunnel | User | `onebeat` |
+| SSH Tunnel | Authentication | 个人 SSH 私钥 |
+
+日常人工访问建议为开发者单独创建带口令的 SSH 密钥，不要长期复用无口令的 GitHub Actions
+部署私钥。GUI 建立隧道后，数据库看到的连接来自服务器本机，不要求开放任何新防火墙端口。
+
+不支持内置 SSH 隧道的工具，可先在 Mac 终端执行：
+
+```bash
+ssh \
+  -i ~/.ssh/<个人私钥> \
+  -N \
+  -L 15432:127.0.0.1:5432 \
+  onebeat@<Vultr-IP>
+```
+
+保持该终端运行，然后让 GUI 连接：
+
+```text
+Host:     127.0.0.1
+Port:     15432
+Database: onebeat_test
+Username: onebeat_test
+Password: <TEST_PASSWORD>
+```
+
+优先在 `onebeat_test` 调试。生产账号当前是生产库所有者，误执行写操作会直接修改业务数据；
+访问生产库前先做备份，并在 GUI 中关闭自动提交或手动开启只读事务。业务进入正式运营后，建议再
+创建专门的生产只读诊断账号。
+
+### 5.6 使用 golang-migrate 管理表结构
+
+迁移文件位于仓库 `migrations/`，每个版本必须有一对文件：
+
+```text
+000001_create_store_metadata.up.sql
+000001_create_store_metadata.down.sql
+000002_create_products.up.sql
+000002_create_products.down.sql
+```
+
+规则：
+
+1. 已经在共享环境执行过的迁移文件不可修改或重命名；修正结构必须新增下一个版本。
+2. `up` 描述升级，`down` 只回退该版本自己的变更。
+3. 优先使用可短时间完成、可回退的 DDL；大表变更需要单独设计上线方案。
+4. Actions 只自动执行 `up`，绝不自动执行 `down` 或 `force`。
+5. 生产迁移前先备份，并先在 `onebeat_test` 执行同一组迁移。
+
+手工查看测试库版本：
+
+```bash
+cd /opt/onebeatbackend
+
+docker compose \
+  -f docker-compose.test.yml \
+  --profile migration \
+  run --rm migrate \
+  'exec migrate -path=/migrations -database "$DATABASE_URL" version'
+```
+
+手工执行全部待迁移版本：
+
+```bash
+docker compose \
+  -f docker-compose.test.yml \
+  --profile migration \
+  run --rm migrate
+```
+
+如迁移中断并显示 `Dirty database version`，先检查失败 SQL 和数据库实际结构。只有确认结构已经
+人工恢复到某个准确版本后，才能使用 `force <版本>` 修复迁移标记；不要把 `force` 当作普通
+重试命令，也不要在不了解当前结构时执行 `down`。
+
+golang-migrate 的镜像固定为 `migrate/migrate:v4.19.1`，避免 `latest` 更新造成不可预测变化。
+
+### 5.7 备份
+
+单容器意味着生产和测试共享同一个持久卷，但备份应按逻辑库分别执行。在服务器上创建只有
+`onebeat` 可访问的备份目录：
+
+```bash
+install -d -m 0700 /opt/onebeatbackend/backups
+
+docker exec onebeat-postgres \
+  pg_dump -U onebeat_admin -d onebeat_prod -Fc \
+  >"/opt/onebeatbackend/backups/onebeat_prod_$(date +%Y%m%d_%H%M%S).dump"
+
+docker exec onebeat-postgres \
+  pg_dump -U onebeat_admin -d onebeat_test -Fc \
+  >"/opt/onebeatbackend/backups/onebeat_test_$(date +%Y%m%d_%H%M%S).dump"
+
+ls -lh /opt/onebeatbackend/backups
+```
+
+备份文件仍在同一台 Vultr 上，不足以应对整机或磁盘故障。商店正式存放订单等关键数据前，应把
+加密备份定期同步到独立对象存储，并定期在临时数据库执行恢复演练。
+
+PostgreSQL 官方镜像只会在空数据目录运行 `/docker-entrypoint-initdb.d`，相关行为见
+[PostgreSQL Docker Official Image](https://hub.docker.com/_/postgres)；迁移文件命名与 CLI 用法见
+[golang-migrate](https://github.com/golang-migrate/migrate)。
+
+## 6. 配置 GitHub Actions Secrets
 
 在仓库 `Settings > Secrets and variables > Actions` 中创建 Repository secrets：
 
@@ -455,11 +740,13 @@ openssl s_client \
 | `SSH_PORT` | 可选，未设置时默认 `22` |
 
 工作流推送 GHCR 使用 GitHub 自动提供的 `GITHUB_TOKEN`，不用额外配置 Registry 密码。
+数据库密码不放入 GitHub Secrets；它们由服务器本地的 `.env.database`、`.env.prod` 和
+`.env.test` 提供。
 
 建议在 `Settings > Environments` 创建 `production` 和 `testing`。如果生产发布需要人工确认，
 给 `production` 环境配置 Required reviewers；工作流本身无需修改。
 
-## 6. 首次发布与验证
+## 7. 首次发布与验证
 
 ```bash
 git switch staging
@@ -474,6 +761,8 @@ git push origin master
 ```bash
 curl https://api.example.com/api/v1/test
 curl https://api-test.example.com:8443/api/v1/test
+curl https://api.example.com/api/v1/database/test
+curl https://api-test.example.com:8443/api/v1/database/test
 
 ssh onebeat@<Vultr IP> 'docker ps'
 ssh onebeat@<Vultr IP> 'docker inspect --format "{{.State.Health.Status}}" onebeat-prod'
@@ -482,7 +771,7 @@ ssh onebeat@<Vultr IP> 'docker inspect --format "{{.State.Health.Status}}" onebe
 
 响应中的 `environment` 应分别为 `prod` 与 `test`，`version` 应等于本次提交短 SHA。
 
-## 7. 回滚
+## 8. 回滚
 
 版本标签不会随滚动标签覆盖。回滚生产到 `prod-abc1234`：
 
@@ -493,3 +782,6 @@ ONEBEAT_IMAGE=ghcr.io/1173774897/onebeatbackend:prod-abc1234 \
 ```
 
 测试环境同理，把标签改为 `test-<短 SHA>` 并使用 `docker-compose.test.yml`。
+
+应用镜像回滚不会自动回退数据库结构。只有对应旧版本应用确实无法兼容新结构，并且已经完成
+数据库备份与回退评审时，才单独执行目标迁移的 `down`。
