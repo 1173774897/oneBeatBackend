@@ -55,6 +55,7 @@ func testHandler(environment string, version string) http.HandlerFunc {
 				Scheme:      scheme,
 				Environment: environment,
 				Version:     version,
+				TestVersion: "1111",
 			},
 		})
 	}
