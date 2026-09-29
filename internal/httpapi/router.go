@@ -21,7 +21,7 @@ type testResponse struct {
 	Version     string `json:"version"`
 }
 
-// NewHandler returns the HTTP surface for the store API.
+// NewHandler returns the HTTP surface for the store API..
 func NewHandler(logger *slog.Logger, environment string, version string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", getOnly(healthHandler))
