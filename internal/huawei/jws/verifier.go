@@ -28,9 +28,30 @@ func NewVerifier() (*Verifier, error) {
 
 // Verify validates the ES256 signature and the x5c chain before returning the payload.
 func (v *Verifier) Verify(compact string) ([]byte, error) {
+	parts, leaf, err := v.parseHeaderAndLeaf(compact)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.verifyEmbeddedChain(leaf, compact); err != nil {
+		return nil, err
+	}
+	return v.verifyPayloadSignature(parts, leaf)
+}
+
+// VerifySignatureWithEmbeddedLeaf checks ES256 using the leaf x5c certificate only.
+// Used for sandbox client JWS when the Huawei chain is not anchored in the system CA pool.
+func (v *Verifier) VerifySignatureWithEmbeddedLeaf(compact string) ([]byte, error) {
+	parts, leaf, err := v.parseHeaderAndLeaf(compact)
+	if err != nil {
+		return nil, err
+	}
+	return v.verifyPayloadSignature(parts, leaf)
+}
+
+func (v *Verifier) parseHeaderAndLeaf(compact string) ([]string, *x509.Certificate, error) {
 	parts := strings.Split(compact, ".")
 	if len(parts) != 3 {
-		return nil, errors.New("invalid compact JWS format")
+		return nil, nil, errors.New("invalid compact JWS format")
 	}
 	var header struct {
 		Algorithm string   `json:"alg"`
@@ -39,21 +60,38 @@ func (v *Verifier) Verify(compact string) ([]byte, error) {
 	}
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil || json.Unmarshal(headerBytes, &header) != nil {
-		return nil, errors.New("invalid JWS header")
+		return nil, nil, errors.New("invalid JWS header")
 	}
 	if header.Algorithm != "ES256" || (header.Type != "" && header.Type != "JWT") || len(header.Chain) == 0 {
-		return nil, errors.New("unsupported Huawei JWS header")
+		return nil, nil, errors.New("unsupported Huawei JWS header")
 	}
+	der, err := base64.StdEncoding.DecodeString(header.Chain[0])
+	if err != nil {
+		return nil, nil, errors.New("invalid x5c certificate encoding")
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse x5c certificate: %w", err)
+	}
+	return parts, leaf, nil
+}
 
+func (v *Verifier) verifyEmbeddedChain(leaf *x509.Certificate, compact string) error {
+	parts := strings.Split(compact, ".")
+	var header struct {
+		Chain []string `json:"x5c"`
+	}
+	headerBytes, _ := base64.RawURLEncoding.DecodeString(parts[0])
+	_ = json.Unmarshal(headerBytes, &header)
 	certificates := make([]*x509.Certificate, 0, len(header.Chain))
 	for _, encoded := range header.Chain {
 		der, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return nil, errors.New("invalid x5c certificate encoding")
+			return errors.New("invalid x5c certificate encoding")
 		}
 		certificate, err := x509.ParseCertificate(der)
 		if err != nil {
-			return nil, fmt.Errorf("parse x5c certificate: %w", err)
+			return fmt.Errorf("parse x5c certificate: %w", err)
 		}
 		certificates = append(certificates, certificate)
 	}
@@ -67,9 +105,13 @@ func (v *Verifier) Verify(compact string) ([]byte, error) {
 		CurrentTime:   v.now(),
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
-		return nil, fmt.Errorf("verify Huawei JWS certificate chain: %w", err)
+		return fmt.Errorf("verify Huawei JWS certificate chain: %w", err)
 	}
-	publicKey, ok := certificates[0].PublicKey.(*ecdsa.PublicKey)
+	return nil
+}
+
+func (v *Verifier) verifyPayloadSignature(parts []string, leaf *x509.Certificate) ([]byte, error) {
+	publicKey, ok := leaf.PublicKey.(*ecdsa.PublicKey)
 	if !ok || publicKey.Curve.Params().Name != "P-256" {
 		return nil, errors.New("Huawei JWS leaf certificate is not an ECDSA P-256 key")
 	}

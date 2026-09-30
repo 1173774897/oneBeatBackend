@@ -174,9 +174,9 @@ func NewClient(httpClient *http.Client, config Config) (*Client, error) {
 }
 
 func (c *Client) DecodePurchaseData(compact string) (PurchaseReference, error) {
-	payload, err := c.jwsVerifier.Verify(compact)
+	payload, err := c.verifyClientPurchaseJWS(compact)
 	if err != nil {
-		return PurchaseReference{}, fmt.Errorf("verify client purchase JWS: %w", err)
+		return PurchaseReference{}, err
 	}
 	var direct PurchaseOrderPayload
 	if err := json.Unmarshal(payload, &direct); err == nil && direct.PurchaseOrderID != "" {
@@ -199,6 +199,21 @@ func (c *Client) DecodePurchaseData(compact string) (PurchaseReference, error) {
 		return PurchaseReference{}, errors.New("subscription JWS is missing order identity")
 	}
 	return PurchaseReference{order.PurchaseOrderID, token, productID, 2}, nil
+}
+
+func (c *Client) verifyClientPurchaseJWS(compact string) ([]byte, error) {
+	payload, err := c.jwsVerifier.Verify(compact)
+	if err == nil {
+		return payload, nil
+	}
+	if c.environment != "sandbox" {
+		return nil, fmt.Errorf("verify client purchase JWS: %w", err)
+	}
+	payload, leafErr := c.jwsVerifier.VerifySignatureWithEmbeddedLeaf(compact)
+	if leafErr != nil {
+		return nil, fmt.Errorf("verify client purchase JWS: %w", err)
+	}
+	return payload, nil
 }
 
 func (c *Client) QueryOrder(ctx context.Context, orderID string, purchaseToken string) (PurchaseOrderPayload, error) {

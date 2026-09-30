@@ -86,8 +86,8 @@ func NewHandlerWithStoreServices(
 	mux.HandleFunc("/api/v1/database/test", getOnly(databaseTestHandler(logger, store)))
 	mux.HandleFunc("/api/v1/store/bootstrap", getOnly(storeBootstrapHandler(services)))
 	mux.HandleFunc("/api/v1/auth/huawei", postOnly(huaweiAuthHandler(logger, services)))
-	mux.HandleFunc("/api/v1/iap/purchases/verify", postOnly(verifyPurchaseHandler(services)))
-	mux.HandleFunc("/api/v1/iap/purchases/restore", postOnly(restorePurchasesHandler(services)))
+	mux.HandleFunc("/api/v1/iap/purchases/verify", postOnly(verifyPurchaseHandler(logger, services)))
+	mux.HandleFunc("/api/v1/iap/purchases/restore", postOnly(restorePurchasesHandler(logger, services)))
 	mux.HandleFunc("/", notFoundHandler)
 	return requestMiddleware(logger, mux)
 }
@@ -177,7 +177,7 @@ func logHuaweiAuthFailure(logger *slog.Logger, err error) {
 	logger.Error("huawei identity verification failed", "reason", err.Error())
 }
 
-func verifyPurchaseHandler(services *StoreServices) http.HandlerFunc {
+func verifyPurchaseHandler(logger *slog.Logger, services *StoreServices) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := requireUser(w, r, services)
 		if !ok {
@@ -191,11 +191,14 @@ func verifyPurchaseHandler(services *StoreServices) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
 		defer cancel()
 		bootstrap, err := services.StoreService.VerifyPurchase(ctx, userID, input)
+		if err != nil {
+			logPurchaseOperationFailure(logger, "verify", input.ProductID, len(input.PurchaseData), err)
+		}
 		writeStoreResult(w, bootstrap, err)
 	}
 }
 
-func restorePurchasesHandler(services *StoreServices) http.HandlerFunc {
+func restorePurchasesHandler(logger *slog.Logger, services *StoreServices) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := requireUser(w, r, services)
 		if !ok {
@@ -211,8 +214,23 @@ func restorePurchasesHandler(services *StoreServices) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
 		defer cancel()
 		bootstrap, err := services.StoreService.RestorePurchases(ctx, userID, input.Purchases)
+		if err != nil && len(input.Purchases) > 0 {
+			logPurchaseOperationFailure(logger, "restore", input.Purchases[0].ProductID, len(input.Purchases[0].PurchaseData), err)
+		}
 		writeStoreResult(w, bootstrap, err)
 	}
+}
+
+func logPurchaseOperationFailure(logger *slog.Logger, operation string, productID string, purchaseDataLen int, err error) {
+	if logger == nil || err == nil {
+		return
+	}
+	logger.Warn("iap purchase operation failed",
+		"operation", operation,
+		"productId", productID,
+		"purchaseDataLen", purchaseDataLen,
+		"reason", err.Error(),
+	)
 }
 
 func writeStoreResult(w http.ResponseWriter, bootstrap catalog.Bootstrap, err error) {
