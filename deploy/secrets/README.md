@@ -34,30 +34,26 @@ GitHub Actions Secrets 或 Docker 镜像。数据库连接仍使用上一级的 
 
 `HUAWEI_IAP_PRIVATE_KEY` 为单行 PEM，换行写为 `\n`；Go 实现读取后会还原为真实换行。
 
-### 华为 IAP 服务账号三项字段怎么填
+### Harmony IAP 服务端密钥三项怎么填
 
-这三项必须来自华为开发者联盟 **API Console 创建服务账号后下载的同一个 JSON 文件**：
+查单 / 确认发货走 [IAP 服务端 JWT](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/iap-jwt-description)（`Authorization: Bearer <JWT>`，`aud=iap-v1`，**ES256**，带请求体 `digest`）。须从 **AppGallery Connect → 应用 → 应用内支付 → 配置密钥** 创建并下载**同一套**密钥（多为 **EC P-256**）：
 
-| JSON 字段 | 环境变量 | 要求 |
+| 密钥文件字段 | 环境变量 | 要求 |
 | --- | --- | --- |
-| `private_key` | `HUAWEI_IAP_PRIVATE_KEY` | RSA 私钥，服务账号 JWT 使用 PS256；PEM 换行写成 `\n` |
-| `key_id` | `HUAWEI_IAP_KEY_ID` | 与该 RSA 私钥配套，写入 JWT `kid` |
-| `sub_account` | `HUAWEI_IAP_ISSUER_ID` | 写入 JWT `iss` |
+| 私钥 PEM | `HUAWEI_IAP_PRIVATE_KEY` | **ECDSA P-256**；换行写成 `\n` |
+| 密钥 ID | `HUAWEI_IAP_KEY_ID` | JWT `kid` |
+| Issuer ID | `HUAWEI_IAP_ISSUER_ID` | JWT `iss` |
 
-不要使用 AGC 调试签名、IAP 通知验签、客户端签名或其他地方生成的 EC P-256 私钥。它们即使也是
-`-----BEGIN PRIVATE KEY-----`，算法仍不兼容。官方文档写 `alg=PS256`，但换取 `access_token` 时华为 OAuth 实际校验 **RS256**（PKCS#1 v1.5 + SHA-256）；本仓库 `internal/huawei/iap` 已按 RS256 签发 assertion。另见
-SHA-256 with RSA/PSS（部分文档仍写 PS256）：
-[基于 Service Account 开放鉴权](https://developer.huawei.com/consumer/cn/doc/hmscore-guides/open-platform-service-account-0000001053509221)。
+App ID（`6917617181108973504`）在代码里作为 JWT 的 `aid`，不必另配 env。
 
-在不输出私钥内容的前提下，可检查密钥类型：
+**不要**把 API Console **服务账号 RSA** 私钥填进 `HUAWEI_IAP_PRIVATE_KEY`：Harmony IAP REST 不接受 OAuth 换得的 access token，RSA 也无法签 ES256 请求 JWT。
+
+检查私钥类型（勿输出 PEM 内容）：
 
 ```bash
-# 在 API Console 下载 JSON 后执行。输出应包含 "Private-Key: (2048 bit" 或更高 RSA 位数。
-jq -r '.private_key' /path/to/service-account.json | openssl pkey -text -noout | head -n 1
+# 应看到 prime256v1 / P-256，而不是 RSA 2048/4096
+openssl pkey -in /path/to/iap-server-key.pem -text -noout | head -n 3
 ```
-
-如果输出包含 `ASN1 OID: prime256v1`、`NIST CURVE: P-256` 或命令无法按 RSA 服务账号密钥解析，
-不要把它填入 IAP 配置。`private_key`、`key_id`、`sub_account` 必须成套使用，不能跨服务账号拼接。
 
 中国区 Order 与 Subscription 地址已按华为官方站点表固定在 Go 代码中，不需要也不允许在 env 中
 另配。若其他资料出现不同域名，以

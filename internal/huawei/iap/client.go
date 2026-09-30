@@ -3,22 +3,22 @@ package iap
 import (
 	"bytes"
 	"context"
-	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	huaweijws "onebeat/store-api/internal/huawei/jws"
@@ -28,7 +28,7 @@ const (
 	// The China site is fixed in code so production never guesses a data-processing site.
 	ChinaOrderRootURL        = "https://orders-drcn.iap.cloud.huawei.com.cn"
 	ChinaSubscriptionRootURL = "https://subscr-drcn.iap.cloud.huawei.com.cn"
-	OAuthTokenURL            = "https://oauth-login.cloud.huawei.com/oauth2/v3/token"
+	iapRequestJWTAudience = "iap-v1"
 
 	orderConfirmPath        = "/order/harmony/v1/application/purchase/shipped/confirm"
 	orderStatusPath         = "/order/harmony/v1/application/order/status/query"
@@ -48,7 +48,7 @@ type Config struct {
 
 type Client struct {
 	httpClient    *http.Client
-	privateKey    *rsa.PrivateKey
+	signingKey    *ecdsa.PrivateKey
 	keyID         string
 	issuerID      string
 	environment   string
@@ -56,10 +56,6 @@ type Client struct {
 	packageName   string
 	jwsVerifier   *huaweijws.Verifier
 	now           func() time.Time
-
-	mu          sync.Mutex
-	accessToken string
-	tokenExpiry time.Time
 }
 
 type Millis int64
@@ -158,7 +154,7 @@ type PurchaseReference struct {
 }
 
 func NewClient(httpClient *http.Client, config Config) (*Client, error) {
-	privateKey, err := parsePrivateKey(config.PrivateKeyPEM)
+	signingKey, err := parseIAPAPIPrivateKey(config.PrivateKeyPEM)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +163,7 @@ func NewClient(httpClient *http.Client, config Config) (*Client, error) {
 		return nil, err
 	}
 	return &Client{
-		httpClient: httpClient, privateKey: privateKey, keyID: config.KeyID, issuerID: config.IssuerID,
+		httpClient: httpClient, signingKey: signingKey, keyID: config.KeyID, issuerID: config.IssuerID,
 		environment: config.Environment, applicationID: config.ApplicationID, packageName: config.PackageName,
 		jwsVerifier: verifier, now: time.Now,
 	}, nil
@@ -349,11 +345,11 @@ func (c *Client) confirm(ctx context.Context, path string, orderID string, purch
 }
 
 func (c *Client) call(ctx context.Context, path string, orderID string, purchaseToken string, target interface{}) error {
-	token, err := c.token(ctx)
+	body, err := json.Marshal(map[string]string{"purchaseOrderId": orderID, "purchaseToken": purchaseToken})
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(map[string]string{"purchaseOrderId": orderID, "purchaseToken": purchaseToken})
+	requestJWT, err := c.signedIAPRequestJWT(body)
 	if err != nil {
 		return err
 	}
@@ -365,7 +361,7 @@ func (c *Client) call(ctx context.Context, path string, orderID string, purchase
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+requestJWT)
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	req.Header.Set("Accept", "application/json")
 	response, err := c.httpClient.Do(req)
@@ -374,7 +370,8 @@ func (c *Client) call(ctx context.Context, path string, orderID string, purchase
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("call Huawei IAP: HTTP %d", response.StatusCode)
+		responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+		return fmt.Errorf("call Huawei IAP: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(responseBody)))
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, maximumResponseBody)).Decode(target); err != nil {
 		return fmt.Errorf("decode Huawei IAP response: %w", err)
@@ -382,81 +379,57 @@ func (c *Client) call(ctx context.Context, path string, orderID string, purchase
 	return nil
 }
 
-func (c *Client) token(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.accessToken != "" && c.now().Add(time.Minute).Before(c.tokenExpiry) {
-		return c.accessToken, nil
-	}
-	assertion, err := c.signedAssertion()
-	if err != nil {
-		return "", err
-	}
-	form := url.Values{}
-	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
-	form.Set("assertion", assertion)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, OAuthTokenURL, strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("exchange Huawei service assertion: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return "", fmt.Errorf("exchange Huawei service assertion: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var payload struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, maximumResponseBody)).Decode(&payload); err != nil {
-		return "", fmt.Errorf("decode Huawei access token: %w", err)
-	}
-	if payload.AccessToken == "" {
-		return "", errors.New("Huawei access token response was empty")
-	}
-	if payload.ExpiresIn <= 0 {
-		payload.ExpiresIn = 3600
-	}
-	c.accessToken = payload.AccessToken
-	c.tokenExpiry = c.now().Add(time.Duration(payload.ExpiresIn) * time.Second)
-	return c.accessToken, nil
-}
-
-func (c *Client) signedAssertion() (string, error) {
+// signedIAPRequestJWT implements HarmonyOS IAP server API auth (aud=iap-v1, ES256, body digest).
+// See https://developer.huawei.com/consumer/cn/doc/harmonyos-references/iap-jwt-description
+func (c *Client) signedIAPRequestJWT(body []byte) (string, error) {
+	digest := sha256.Sum256(body)
 	now := c.now().UTC()
-	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": c.keyID, "typ": "JWT"})
+	header, _ := json.Marshal(map[string]string{"alg": "ES256", "kid": c.keyID, "typ": "JWT"})
 	claims, _ := json.Marshal(map[string]interface{}{
-		"iss": c.issuerID, "aud": OAuthTokenURL, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+		"iss": c.issuerID, "aud": iapRequestJWTAudience, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+		"aid": c.applicationID, "digest": hex.EncodeToString(digest[:]),
 	})
 	unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
 	hash := sha256.Sum256([]byte(unsigned))
-	signature, err := rsa.SignPKCS1v15(rand.Reader, c.privateKey, crypto.SHA256, hash[:])
+	r, s, err := ecdsa.Sign(rand.Reader, c.signingKey, hash[:])
 	if err != nil {
-		return "", fmt.Errorf("sign Huawei service assertion: %w", err)
+		return "", fmt.Errorf("sign Harmony IAP request JWT: %w", err)
 	}
+	signature := encodeES256JWSSignature(r, s, c.signingKey.Curve)
 	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-func parsePrivateKey(value string) (*rsa.PrivateKey, error) {
+func encodeES256JWSSignature(r, s *big.Int, curve elliptic.Curve) []byte {
+	size := (curve.Params().BitSize + 7) / 8
+	signature := make([]byte, 2*size)
+	rBytes := r.Bytes()
+	sBytes := s.Bytes()
+	copy(signature[size-len(rBytes):size], rBytes)
+	copy(signature[2*size-len(sBytes):], sBytes)
+	return signature
+}
+
+func parseIAPAPIPrivateKey(value string) (*ecdsa.PrivateKey, error) {
 	block, _ := pem.Decode([]byte(value))
 	if block == nil {
 		return nil, errors.New("HUAWEI_IAP_PRIVATE_KEY is not valid PEM")
 	}
 	if parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-		key, ok := parsed.(*rsa.PrivateKey)
+		key, ok := parsed.(*ecdsa.PrivateKey)
 		if !ok {
-			return nil, errors.New("HUAWEI_IAP_PRIVATE_KEY is not an RSA key")
+			return nil, errors.New("Harmony IAP server APIs require an EC P-256 private key (ES256) from AGC IAP key configuration; RSA API Console service account keys cannot call order query")
+		}
+		if key.Curve.Params().Name != "P-256" {
+			return nil, errors.New("HUAWEI_IAP_PRIVATE_KEY must be ECDSA P-256 for Harmony IAP server APIs")
 		}
 		return key, nil
 	}
-	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	key, err := x509.ParseECPrivateKey(block.Bytes)
 	if err != nil {
-		return nil, errors.New("HUAWEI_IAP_PRIVATE_KEY must be PKCS#8 or PKCS#1 RSA PEM")
+		return nil, errors.New("HUAWEI_IAP_PRIVATE_KEY must be PKCS#8 or SEC1 EC PEM (P-256)")
+	}
+	if key.Curve.Params().Name != "P-256" {
+		return nil, errors.New("HUAWEI_IAP_PRIVATE_KEY must be ECDSA P-256 for Harmony IAP server APIs")
 	}
 	return key, nil
 }
