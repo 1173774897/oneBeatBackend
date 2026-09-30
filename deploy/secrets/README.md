@@ -45,8 +45,8 @@ GitHub Actions Secrets 或 Docker 镜像。数据库连接仍使用上一级的 
 | `sub_account` | `HUAWEI_IAP_ISSUER_ID` | 写入 JWT `iss` |
 
 不要使用 AGC 调试签名、IAP 通知验签、客户端签名或其他地方生成的 EC P-256 私钥。它们即使也是
-`-----BEGIN PRIVATE KEY-----`，算法仍不兼容。官方服务账号说明要求 `alg=PS256`，签名算法为
-SHA-256 with RSA/PSS：
+`-----BEGIN PRIVATE KEY-----`，算法仍不兼容。官方文档写 `alg=PS256`，但换取 `access_token` 时华为 OAuth 实际校验 **RS256**（PKCS#1 v1.5 + SHA-256）；本仓库 `internal/huawei/iap` 已按 RS256 签发 assertion。另见
+SHA-256 with RSA/PSS（部分文档仍写 PS256）：
 [基于 Service Account 开放鉴权](https://developer.huawei.com/consumer/cn/doc/hmscore-guides/open-platform-service-account-0000001053509221)。
 
 在不输出私钥内容的前提下，可检查密钥类型：

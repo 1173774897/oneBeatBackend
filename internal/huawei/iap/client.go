@@ -406,7 +406,8 @@ func (c *Client) token(ctx context.Context) (string, error) {
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("exchange Huawei service assertion: HTTP %d", response.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+		return "", fmt.Errorf("exchange Huawei service assertion: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var payload struct {
 		AccessToken string `json:"access_token"`
@@ -428,16 +429,13 @@ func (c *Client) token(ctx context.Context) (string, error) {
 
 func (c *Client) signedAssertion() (string, error) {
 	now := c.now().UTC()
-	header, _ := json.Marshal(map[string]string{"alg": "PS256", "kid": c.keyID, "typ": "JWT"})
+	header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": c.keyID, "typ": "JWT"})
 	claims, _ := json.Marshal(map[string]interface{}{
-		"iss": c.issuerID, "aud": OAuthTokenURL, "iat": now.Unix(), "exp": now.Add(55 * time.Minute).Unix(),
+		"iss": c.issuerID, "aud": OAuthTokenURL, "iat": now.Unix(), "exp": now.Add(time.Hour).Unix(),
 	})
 	unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
 	hash := sha256.Sum256([]byte(unsigned))
-	signature, err := rsa.SignPSS(rand.Reader, c.privateKey, crypto.SHA256, hash[:], &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthEqualsHash,
-		Hash:       crypto.SHA256,
-	})
+	signature, err := rsa.SignPKCS1v15(rand.Reader, c.privateKey, crypto.SHA256, hash[:])
 	if err != nil {
 		return "", fmt.Errorf("sign Huawei service assertion: %w", err)
 	}
