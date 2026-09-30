@@ -117,3 +117,33 @@ func TestExchangeAuthorizationCodeOmitsRedirectURIAndKeepsHuaweiErrorCodes(t *te
 		t.Fatalf("error leaked credential material: %v", err)
 	}
 }
+
+func TestHuaweiAccountAuthenticatorAcceptsUserInfoWhenOpenIDDiffersFromSubject(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := `{"access_token":"account-access","id_token":"server-id-token"}`
+		if request.URL.Path == "/userinfo" {
+			body = `{"openId":"app-open-id","unionId":"UnionID-CaseSensitive"}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	authenticator := NewHuaweiAccountAuthenticator(client, "client-id", "client-secret", fakeIDTokenVerifier{
+		identities: map[string]HuaweiIdentity{
+			"client-id-token": {Subject: "jwt-subject-not-openid"},
+			"server-id-token": {Subject: "jwt-subject-not-openid"},
+		},
+	})
+	authenticator.tokenURL = "https://example.test/token"
+	authenticator.userInfoURL = "https://example.test/userinfo"
+
+	identity, err := authenticator.Authenticate(context.Background(), "client-id-token", "one-use-code")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	if identity.UnionID != "UnionID-CaseSensitive" || identity.Subject != "jwt-subject-not-openid" {
+		t.Fatalf("unexpected identity: %+v", identity)
+	}
+}

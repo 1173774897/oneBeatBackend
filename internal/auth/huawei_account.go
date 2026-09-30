@@ -82,19 +82,14 @@ func (a *HuaweiAccountAuthenticator) Authenticate(
 	if err != nil {
 		return HuaweiIdentity{}, err
 	}
-	if accountInfo.OpenID != "" && accountInfo.OpenID != serverIdentity.Subject {
-		return HuaweiIdentity{}, errors.New("Huawei user information does not match the ID token")
-	}
-	if accountInfo.UnionID == "" {
-		accountInfo.UnionID = serverIdentity.UnionID
-	}
-	if accountInfo.UnionID == "" {
+	unionID := firstNonEmpty(accountInfo.UnionID, serverIdentity.UnionID)
+	if unionID == "" {
 		return HuaweiIdentity{}, errors.New("Huawei account response did not contain UnionID")
 	}
-	if serverIdentity.UnionID != "" && serverIdentity.UnionID != accountInfo.UnionID {
+	if serverIdentity.UnionID != "" && serverIdentity.UnionID != unionID {
 		return HuaweiIdentity{}, errors.New("Huawei UnionID differs between verified responses")
 	}
-	return HuaweiIdentity{UnionID: accountInfo.UnionID, Subject: serverIdentity.Subject}, nil
+	return HuaweiIdentity{UnionID: unionID, Subject: serverIdentity.Subject}, nil
 }
 
 type accountCredentials struct {
@@ -138,8 +133,38 @@ func (a *HuaweiAccountAuthenticator) exchangeAuthorizationCode(
 }
 
 type huaweiAccountInfo struct {
-	OpenID  string `json:"openID"`
-	UnionID string `json:"unionID"`
+	OpenID  string
+	UnionID string
+}
+
+func (info *huaweiAccountInfo) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	info.OpenID = firstNonEmpty(
+		jsonStringField(raw, "openID"),
+		jsonStringField(raw, "openId"),
+		jsonStringField(raw, "openid"),
+	)
+	info.UnionID = firstNonEmpty(
+		jsonStringField(raw, "unionID"),
+		jsonStringField(raw, "unionId"),
+		jsonStringField(raw, "union_id"),
+	)
+	return nil
+}
+
+func jsonStringField(raw map[string]json.RawMessage, key string) string {
+	value, ok := raw[key]
+	if !ok {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(value, &text) != nil {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func (a *HuaweiAccountAuthenticator) fetchUserInfo(
