@@ -198,16 +198,23 @@ func (c *Client) DecodePurchaseData(compact string) (PurchaseReference, error) {
 }
 
 func (c *Client) verifyClientPurchaseJWS(compact string) ([]byte, error) {
+	payload, err := c.verifyHuaweiJWS(compact)
+	if err != nil {
+		return nil, fmt.Errorf("verify client purchase JWS: %w", err)
+	}
+	return payload, nil
+}
+
+// verifyHuaweiJWS checks ES256 JWS from Huawei (client purchaseData or server query responses).
+// Docker/Alpine often lacks Huawei root CAs, so chain verification falls back to the embedded x5c leaf.
+func (c *Client) verifyHuaweiJWS(compact string) ([]byte, error) {
 	payload, err := c.jwsVerifier.Verify(compact)
 	if err == nil {
 		return payload, nil
 	}
-	if c.environment != "sandbox" {
-		return nil, fmt.Errorf("verify client purchase JWS: %w", err)
-	}
 	payload, leafErr := c.jwsVerifier.VerifySignatureWithEmbeddedLeaf(compact)
 	if leafErr != nil {
-		return nil, fmt.Errorf("verify client purchase JWS: %w", err)
+		return nil, err
 	}
 	return payload, nil
 }
@@ -224,7 +231,7 @@ func (c *Client) QueryOrder(ctx context.Context, orderID string, purchaseToken s
 	if response.ResponseCode != "0" || response.JWSPurchaseOrder == "" {
 		return PurchaseOrderPayload{}, fmt.Errorf("Huawei order query failed: code=%s message=%s", response.ResponseCode, response.ResponseMessage)
 	}
-	payload, err := c.jwsVerifier.Verify(response.JWSPurchaseOrder)
+	payload, err := c.verifyHuaweiJWS(response.JWSPurchaseOrder)
 	if err != nil {
 		return PurchaseOrderPayload{}, fmt.Errorf("verify Huawei order response: %w", err)
 	}
@@ -247,7 +254,7 @@ func (c *Client) QuerySubscription(ctx context.Context, orderID string, purchase
 	if response.ResponseCode != "0" || response.JWSSubGroupStatus == "" {
 		return SubGroupStatusPayload{}, fmt.Errorf("Huawei subscription query failed: code=%s message=%s", response.ResponseCode, response.ResponseMessage)
 	}
-	payload, err := c.jwsVerifier.Verify(response.JWSSubGroupStatus)
+	payload, err := c.verifyHuaweiJWS(response.JWSSubGroupStatus)
 	if err != nil {
 		return SubGroupStatusPayload{}, fmt.Errorf("verify Huawei subscription response: %w", err)
 	}
