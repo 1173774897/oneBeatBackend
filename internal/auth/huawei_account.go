@@ -14,9 +14,21 @@ import (
 const (
 	huaweiAccountTokenURL    = "https://oauth-login.cloud.huawei.com/oauth2/v3/token"
 	huaweiAccountUserInfoURL = "https://account.cloud.huawei.com/rest.php?nsp_svc=GOpen.User.getInfo"
-	huaweiAccountRedirectURI = "hms://redirect_url"
 	maximumAccountBody       = 1 << 20
 )
+
+// HuaweiAPIError is a Huawei Account response that failed. It carries only HTTP status and
+// Huawei error codes, never tokens, authorization codes, or client secrets.
+type HuaweiAPIError struct {
+	Operation  string
+	HTTPStatus int
+	ErrorCode  string
+	SubError   string
+}
+
+func (e *HuaweiAPIError) Error() string {
+	return fmt.Sprintf("%s: HTTP %d error=%s sub_error=%s", e.Operation, e.HTTPStatus, e.ErrorCode, e.SubError)
+}
 
 type idTokenVerifier interface {
 	Verify(context.Context, string) (HuaweiIdentity, error)
@@ -102,7 +114,6 @@ func (a *HuaweiAccountAuthenticator) exchangeAuthorizationCode(
 	form.Set("code", authorizationCode)
 	form.Set("client_id", a.clientID)
 	form.Set("client_secret", a.clientSecret)
-	form.Set("redirect_uri", huaweiAccountRedirectURI)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return accountCredentials{}, err
@@ -114,7 +125,7 @@ func (a *HuaweiAccountAuthenticator) exchangeAuthorizationCode(
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return accountCredentials{}, fmt.Errorf("exchange Huawei authorization code: HTTP %d", response.StatusCode)
+		return accountCredentials{}, readHuaweiAPIError("exchange Huawei authorization code", response.StatusCode, response.Body)
 	}
 	var credentials accountCredentials
 	if err := json.NewDecoder(io.LimitReader(response.Body, maximumAccountBody)).Decode(&credentials); err != nil {
@@ -149,11 +160,68 @@ func (a *HuaweiAccountAuthenticator) fetchUserInfo(
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return huaweiAccountInfo{}, fmt.Errorf("fetch Huawei user information: HTTP %d", response.StatusCode)
+		return huaweiAccountInfo{}, readHuaweiAPIError("fetch Huawei user information", response.StatusCode, response.Body)
 	}
 	var accountInfo huaweiAccountInfo
 	if err := json.NewDecoder(io.LimitReader(response.Body, maximumAccountBody)).Decode(&accountInfo); err != nil {
 		return huaweiAccountInfo{}, fmt.Errorf("decode Huawei user information: %w", err)
 	}
 	return accountInfo, nil
+}
+
+func readHuaweiAPIError(operation string, statusCode int, body io.Reader) error {
+	payload, err := io.ReadAll(io.LimitReader(body, maximumAccountBody))
+	apiError := &HuaweiAPIError{Operation: operation, HTTPStatus: statusCode}
+	if err != nil {
+		return apiError
+	}
+	var parsed struct {
+		Error    json.RawMessage `json:"error"`
+		SubError json.RawMessage `json:"sub_error"`
+	}
+	if json.Unmarshal(payload, &parsed) == nil {
+		apiError.ErrorCode = huaweiErrorCode(parsed.Error)
+		apiError.SubError = huaweiErrorCode(parsed.SubError)
+	}
+	return apiError
+}
+
+func huaweiErrorCode(raw json.RawMessage) string {
+	raw = []byte(strings.TrimSpace(string(raw)))
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	if raw[0] != '"' {
+		for _, char := range raw {
+			if char < '0' || char > '9' {
+				return ""
+			}
+		}
+		if len(raw) > 10 {
+			return ""
+		}
+		return string(raw)
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil || !safeHuaweiErrorCode(text) {
+		return ""
+	}
+	return text
+}
+
+func safeHuaweiErrorCode(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z':
+		case char >= 'A' && char <= 'Z':
+		case char >= '0' && char <= '9':
+		case char == '_' || char == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,9 +9,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"onebeat/store-api/internal/auth"
 	"onebeat/store-api/internal/database"
 )
 
@@ -174,6 +177,51 @@ func TestStoreBootstrapReturnsSafeAnonymousCatalog(t *testing.T) {
 	}
 	if !allowed["character.matchman"] || !allowed["scene.sunset_coast"] || allowed["scene.neon_street"] {
 		t.Fatalf("unexpected anonymous access: %+v", allowed)
+	}
+}
+
+type stubHuaweiAuthenticator struct {
+	err error
+}
+
+func (s stubHuaweiAuthenticator) Authenticate(context.Context, string, string) (auth.HuaweiIdentity, error) {
+	return auth.HuaweiIdentity{}, s.err
+}
+
+type stubUserRepository struct{}
+
+func (stubUserRepository) UpsertUser(context.Context, []byte, time.Time) (string, error) {
+	return "", errors.New("not used")
+}
+
+func TestHuaweiAuthLogsHuaweiErrorCodesOnly(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	handler := NewHandlerWithStoreServices(logger, "test", "test-version", &fakeDatabase{}, &StoreServices{
+		HuaweiIdentityAuthenticator: stubHuaweiAuthenticator{err: &auth.HuaweiAPIError{
+			Operation:  "exchange Huawei authorization code",
+			HTTPStatus: http.StatusBadRequest,
+			ErrorCode:  "1203",
+			SubError:   "12304",
+		}},
+		UserRepository: stubUserRepository{},
+		SessionManager: auth.NewSessionManager([]byte("0123456789abcdef0123456789abcdef"), time.Hour),
+	})
+	body := `{"idToken":"header.payload.signature","authorizationCode":"one-use-code"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/huawei", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+	output := logs.String()
+	if !strings.Contains(output, `"huawei_error":"1203"`) || !strings.Contains(output, `"huawei_sub_error":"12304"`) {
+		t.Fatalf("log = %s", output)
+	}
+	if strings.Contains(output, "header.payload") || strings.Contains(output, "one-use-code") {
+		t.Fatalf("log leaked credential material: %s", output)
 	}
 }
 

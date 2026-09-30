@@ -85,7 +85,7 @@ func NewHandlerWithStoreServices(
 	mux.HandleFunc("/api/v1/test", getOnly(testHandler(environment, version)))
 	mux.HandleFunc("/api/v1/database/test", getOnly(databaseTestHandler(logger, store)))
 	mux.HandleFunc("/api/v1/store/bootstrap", getOnly(storeBootstrapHandler(services)))
-	mux.HandleFunc("/api/v1/auth/huawei", postOnly(huaweiAuthHandler(services)))
+	mux.HandleFunc("/api/v1/auth/huawei", postOnly(huaweiAuthHandler(logger, services)))
 	mux.HandleFunc("/api/v1/iap/purchases/verify", postOnly(verifyPurchaseHandler(services)))
 	mux.HandleFunc("/api/v1/iap/purchases/restore", postOnly(restorePurchasesHandler(services)))
 	mux.HandleFunc("/", notFoundHandler)
@@ -118,7 +118,7 @@ func storeBootstrapHandler(services *StoreServices) http.HandlerFunc {
 	}
 }
 
-func huaweiAuthHandler(services *StoreServices) http.HandlerFunc {
+func huaweiAuthHandler(logger *slog.Logger, services *StoreServices) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if services == nil || services.HuaweiIdentityAuthenticator == nil || services.UserRepository == nil || services.SessionManager == nil {
 			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50311, Message: "Huawei account service is not configured"})
@@ -137,6 +137,7 @@ func huaweiAuthHandler(services *StoreServices) http.HandlerFunc {
 		defer cancel()
 		identity, err := services.HuaweiIdentityAuthenticator.Authenticate(ctx, input.IDToken, input.AuthorizationCode)
 		if err != nil {
+			logHuaweiAuthFailure(logger, err)
 			writeJSON(w, http.StatusUnauthorized, responseEnvelope{Code: 40101, Message: "Huawei identity verification failed"})
 			return
 		}
@@ -157,6 +158,23 @@ func huaweiAuthHandler(services *StoreServices) http.HandlerFunc {
 			"user":        map[string]string{"id": userID},
 		}})
 	}
+}
+
+func logHuaweiAuthFailure(logger *slog.Logger, err error) {
+	if logger == nil {
+		return
+	}
+	var apiError *auth.HuaweiAPIError
+	if errors.As(err, &apiError) {
+		logger.Error("huawei identity verification failed",
+			"operation", apiError.Operation,
+			"http_status", apiError.HTTPStatus,
+			"huawei_error", apiError.ErrorCode,
+			"huawei_sub_error", apiError.SubError,
+		)
+		return
+	}
+	logger.Error("huawei identity verification failed", "reason", err.Error())
 }
 
 func verifyPurchaseHandler(services *StoreServices) http.HandlerFunc {

@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -70,5 +72,48 @@ func TestHuaweiAccountAuthenticatorRejectsMismatchedAuthorizationCode(t *testing
 
 	if _, err := authenticator.Authenticate(context.Background(), "client-id-token", "wrong-account-code"); err == nil {
 		t.Fatal("mismatched authorization code unexpectedly authenticated")
+	}
+}
+
+func TestExchangeAuthorizationCodeOmitsRedirectURIAndKeepsHuaweiErrorCodes(t *testing.T) {
+	var form url.Values
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		raw, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		parsed, err := url.ParseQuery(string(raw))
+		if err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		form = parsed
+		body := `{"error":1203,"sub_error":12304,"error_description":"invalid client_secret","access_token":"secret-access-token","id_token":"header.payload.signature"}`
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+	authenticator := NewHuaweiAccountAuthenticator(client, "client-id", "client-secret", fakeIDTokenVerifier{
+		identities: map[string]HuaweiIdentity{"client-id-token": {Subject: "subject-123"}},
+	})
+	authenticator.tokenURL = "https://example.test/token"
+
+	_, err := authenticator.Authenticate(context.Background(), "client-id-token", "one-use-code")
+	if form.Get("redirect_uri") != "" {
+		t.Fatalf("redirect_uri = %q", form.Get("redirect_uri"))
+	}
+	if form.Get("grant_type") != "authorization_code" || form.Get("code") != "one-use-code" || form.Get("client_id") != "client-id" {
+		t.Fatalf("unexpected token request: %v", form)
+	}
+	var apiError *HuaweiAPIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("error = %v", err)
+	}
+	if apiError.HTTPStatus != http.StatusBadRequest || apiError.ErrorCode != "1203" || apiError.SubError != "12304" {
+		t.Fatalf("unexpected Huawei error: %+v", apiError)
+	}
+	if strings.Contains(err.Error(), "secret-access-token") || strings.Contains(err.Error(), "header.payload") || strings.Contains(err.Error(), "client-secret") {
+		t.Fatalf("error leaked credential material: %v", err)
 	}
 }

@@ -187,8 +187,8 @@ GroupUnionID；只有未来需要在不同开发者账号所属的应用之间�
 
 验证成功后，后端按以下步骤取得可信 UnionID：
 
-1. 使用 `HUAWEI_CLIENT_ID`、`HUAWEI_ACCOUNT_CLIENT_SECRET`、`authorizationCode` 和固定回调
-   `hms://redirect_url` 调用华为 OAuth Token 接口。授权码只能使用一次。
+1. 使用 `HUAWEI_CLIENT_ID`、`HUAWEI_ACCOUNT_CLIENT_SECRET` 和 `authorizationCode` 调用华为 OAuth
+   Token 接口。鸿蒙 Account Kit 的 `LoginWithHuaweiID` 授权码不传 `redirect_uri`。授权码只能使用一次。
 2. 验证 OAuth 响应中的 ID Token，并要求其 `sub` 与客户端 ID Token 的 `sub` 完全一致。
 3. 使用 OAuth 响应中的 Access Token 调用华为帐号用户信息接口，读取服务端返回的 UnionID。
 4. 如果用户信息没有 UnionID，则只允许使用已通过签名验证的服务端 ID Token 中的 UnionID；两处都有值时
