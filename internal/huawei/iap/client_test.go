@@ -2,7 +2,7 @@ package iap
 
 import "testing"
 
-func TestValidateOrderAllowsEmptyDeveloperPayloadInSandbox(t *testing.T) {
+func TestValidateOrderIgnoresDeveloperPayloadMismatchInSandbox(t *testing.T) {
 	client := &Client{
 		environment: "sandbox", applicationID: "app-id", packageName: "com.example.app",
 	}
@@ -10,7 +10,7 @@ func TestValidateOrderAllowsEmptyDeveloperPayloadInSandbox(t *testing.T) {
 		ApplicationID: "app-id", PackageName: "com.example.app",
 		ProductID: "onebeat.character.cloud", ProductType: 1,
 		PurchaseOrderID: "order-id", PurchaseToken: "token",
-		Environment: "SANDBOX",
+		DeveloperPayload: "legacy-binding", Environment: "SANDBOX",
 	}
 	if err := client.ValidateOrder(order, "onebeat.character.cloud", 1, "expected-binding"); err != nil {
 		t.Fatalf("validate sandbox legacy order: %v", err)
