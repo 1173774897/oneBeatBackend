@@ -138,6 +138,45 @@ func TestUnknownEndpointReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestStoreBootstrapReturnsSafeAnonymousCatalog(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/store/bootstrap", nil)
+	recorder := httptest.NewRecorder()
+
+	newTestHandler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var envelope decodedEnvelope
+	if err := json.NewDecoder(recorder.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var data struct {
+		ConfigVersion string `json:"configVersion"`
+		Items         []struct {
+			ItemKey string `json:"itemKey"`
+			Access  struct {
+				Allowed bool   `json:"allowed"`
+				Reason  string `json:"reason"`
+			} `json:"access"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(envelope.Data, &data); err != nil {
+		t.Fatalf("decode bootstrap: %v", err)
+	}
+	if data.ConfigVersion == "" || len(data.Items) != 11 {
+		t.Fatalf("unexpected bootstrap: %+v", data)
+	}
+	allowed := make(map[string]bool)
+	for _, item := range data.Items {
+		allowed[item.ItemKey] = item.Access.Allowed
+	}
+	if !allowed["character.matchman"] || !allowed["scene.sunset_coast"] || allowed["scene.neon_street"] {
+		t.Fatalf("unexpected anonymous access: %+v", allowed)
+	}
+}
+
 func newTestHandler() http.Handler {
 	return NewHandler(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),

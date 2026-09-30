@@ -12,6 +12,171 @@
 `GITHUB_TOKEN` 推送 GHCR 镜像，然后通过 SSH 上传对应 Compose 文件并执行
 `docker compose up -d --wait`。健康检查未通过时部署任务会失败。
 
+## 本地开发环境
+
+Vultr 已按本文档后续章节跑通后，日常改代码**不必**在本地复刻整台机器（双 API 容器、Certbot、
+公网 `443`、GHCR 拉镜像、华为 webhook 公网回调）。本地目标是：与线网共用 **同一套 SQL 迁移**
+和 **`onebeat_test` 逻辑库**，在宿主机用 HTTPS API 做快速验证，再推 `staging` 让 Actions 在
+Vultr 上跑 **test 镜像** 做与线上一致的最后一跳。
+
+收藏小铺的业务规则、华为接入与秘密含义见 [store-system-design.md](store-system-design.md)；
+秘密文件布局见 [deploy/secrets/README.md](../deploy/secrets/README.md)。
+
+### 与 Vultr 对照
+
+| 能力 | Vultr（staging / test） | 本地 Mac |
+| --- | --- | --- |
+| PostgreSQL 17 + `onebeat_test` | `onebeat-postgres` | `deploy/docker-compose.database.yml` |
+| 表结构 | Actions：`migrate up` | `scripts/dev-db-migrate.sh` |
+| API | `onebeat-test` 容器，公网 `:8443` | `./scripts/run-api-dev.sh` → `https://localhost:8443` |
+| TLS | Let’s Encrypt（`certs/test`） | `scripts/generate-dev-certs.sh` → 仓库根 `certs/dev-*.pem` |
+| 数据库连接配置 | `/opt/onebeatbackend/.env.test` | `deploy/.env.local`（`127.0.0.1:5432`） |
+| 收藏小铺秘密 | `/opt/onebeatbackend/secrets/test.env` 等 | `deploy/secrets/test.env`（不进 Git） |
+| 秘密注入方式 | Compose `env_file` + 挂载 `secrets/test` | `run-api-dev.sh` 内 source 两个 env 文件 |
+| `onebeat_prod` | 有 prod 容器与库 | 本地通常不启 prod API；首次起库时会一并创建 prod 库 |
+
+**不要填错位置：** GitHub Actions 的 Repository secrets 仅用于 SSH 部署（本文 §6），**不是**
+`deploy/secrets/test.env` 里的 pepper / 华为凭据。
+
+### 配置文件分工
+
+| 文件 | 提交 Git | 内容 |
+| --- | --- | --- |
+| `deploy/.env.database` | 否 | Postgres 管理员与 `onebeat_prod` / `onebeat_test` 建库密码 |
+| `deploy/.env.test` | 否 | 迁移容器用 `DATABASE_URL`（主机名 `onebeat-postgres`） |
+| `deploy/.env.local` | 否 | 宿主机 `go run` 用 `DATABASE_URL`（`127.0.0.1`） |
+| `deploy/secrets/test.env` | 否 | OneBeat pepper、JWT、华为 Account/IAP（含 `\n` 转义 PEM） |
+| `deploy/secrets/test/redemption_codes.json` | 否 | 口令 HMAC 摘要（有活动时再填） |
+
+`bootstrap-local-env.sh` 只生成数据库相关三个 env；`init-local-secrets.sh` 从 example 复制
+`test.env` 与口令 JSON 模板。
+
+### 一次性准备
+
+需要 Go 1.22+、OpenSSL，以及 **Docker 引擎 + Compose CLI**（见下节）。在**仓库根目录**执行：
+
+```bash
+chmod +x scripts/bootstrap-local-env.sh \
+  scripts/dev-db-migrate.sh \
+  scripts/generate-dev-certs.sh \
+  scripts/init-local-secrets.sh \
+  scripts/run-api-dev.sh
+
+# 1) 数据库密码与 deploy/.env.local
+./scripts/bootstrap-local-env.sh
+
+# 2) Postgres 容器（仅监听 127.0.0.1:5432）
+./scripts/compose.sh -f deploy/docker-compose.database.yml up -d --wait --wait-timeout 90
+
+# 3) 迁移（读取 deploy/.env.test，走 Docker 网络 onebeat-postgres）
+./scripts/dev-db-migrate.sh
+
+# 4) 本地 HTTPS 自签名证书（默认 certs/dev-cert.pem、certs/dev-key.pem）
+./scripts/generate-dev-certs.sh
+
+# 5) 收藏小铺秘密模板 → 可编辑文件（不覆盖已存在的 test.env）
+./scripts/init-local-secrets.sh
+```
+
+然后编辑 **`deploy/secrets/test.env`**：补全仍为 `REPLACE_ME` 的项，以及华为 Account/IAP
+段（说明见文件内 `#` 注释）。暂不做口令兑换可保持 `redemption_codes.json` 为示例内容。
+
+若已手工维护过 `deploy/.env.*`，勿重复运行 `bootstrap-local-env.sh`；只要
+`.env.database` 里 `ONEBEAT_TEST_DB_PASSWORD` 与 `.env.local` 中测试库密码一致即可。
+
+### 日常开发循环
+
+```bash
+# 单元测试（不依赖 Docker，也不加载 secrets）
+go test ./...
+
+# 需要数据库时：确保 Postgres 在跑，并应用新迁移
+./scripts/compose.sh -f deploy/docker-compose.database.yml up -d --wait
+./scripts/dev-db-migrate.sh
+
+# 启动 API（脚本打印环境摘要、Postgres 探测、go build -v，再运行 bin/onebeat-api-dev）
+./scripts/run-api-dev.sh
+```
+
+`run-api-dev.sh` 会 source `deploy/.env.local` 与 `deploy/secrets/test.env`，**不必**手敲
+`set -a`。连库与请求日志为应用输出的 JSON（如 `database connection established`）。修改
+`test.env` 后重新执行脚本即可；新开终端需再跑一遍。
+
+另开终端验证（自签名证书需 `-k`）：
+
+```bash
+curl -k https://localhost:8443/healthz
+curl -k https://localhost:8443/api/v1/test
+curl -k https://localhost:8443/api/v1/database/test
+```
+
+期望：`database` 为 `onebeat_test`，`migrationDirty` 为 `false`。本地默认
+`environment` 为 `development`；若要与 staging 一致，在 `deploy/.env.local` 增加
+`APP_ENV=test`。
+
+仅排查 HTTP、临时关闭 TLS：
+
+```bash
+STORE_API_ADDR=:8080 STORE_API_INSECURE_HTTP=1 ./scripts/run-api-dev.sh
+```
+
+### 可选：本地跑 test 容器
+
+与 Vultr 完全一致时，可在 `deploy/` 目录构建镜像并用 `docker-compose.test.yml` 启动；需已存在
+`deploy/.env.test`、`deploy/secrets/test.env` 及 `secrets/test/redemption_codes.json`。日常改 Go
+代码仍推荐 `run-api-dev.sh`，迭代更快。
+
+### 图形化看库
+
+Postgres 绑定 **`127.0.0.1:5432`**，无需 SSH 隧道。DBeaver / TablePlus：
+
+- Database：`onebeat_test`
+- User / Password：`deploy/.env.database` 中的 `ONEBEAT_TEST_DB_*`
+
+Vultr 上同一库按本文 §5.5 经 SSH 隧道访问；勿将服务器 `5432` 开放到公网。
+
+### 何时推 staging
+
+- 改 Go、迁移、Compose 或健康检查：`go test ./...`、上述 curl 通过后，推 `staging`。
+- 只改文档或纯客户端：可跳过本地 API。
+
+更短命令清单见 [README.md](../README.md)「本地启动」。
+
+### Docker Compose CLI
+
+本地文档里的 Compose 命令统一写成 `./scripts/compose.sh -f …`，内部优先 `docker compose`（V2
+插件），否则回退 `docker-compose`。
+
+若直接运行 `docker compose -f …` 出现 **`unknown shorthand flag: 'f' in -f`**，说明当前只有
+独立 `docker` 客户端、**未安装 Compose 插件**（`docker` 会把 `-f` 当成自身参数）。Mac 上推荐：
+
+1. 安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/)（自带引擎 + Compose
+   V2）；或
+2. `brew install docker-compose`，然后使用 `./scripts/compose.sh` 或 `docker-compose -f …`。
+
+安装后应能执行：
+
+```bash
+docker compose version
+# 或
+docker-compose version
+```
+
+且 Docker 守护进程在运行（`docker info` 无 socket 错误）。仅有 Homebrew 的 `docker` CLI、未启动
+Desktop 时，也会出现 `connect: no such file or directory` 到 `/var/run/docker.sock`。
+
+若 `dev-db-migrate.sh` 报 **`password authentication failed for user "onebeat_test"`**，且
+`docker logs onebeat-postgres` 里曾有 **`01-create-environment-databases.sh: Permission denied`**，
+说明首次初始化脚本未执行，卷里只有 `onebeat_admin`、没有 `onebeat_test` 角色。仓库内 init
+脚本应为可执行（`chmod 755 deploy/postgres/init/01-create-environment-databases.sh`），然后
+清空卷重建（**会删除本地 prod/test 库数据**）：
+
+```bash
+./scripts/recreate-local-postgres.sh
+```
+
+或手工：`compose.sh … down -v` → `up -d --wait` → `dev-db-migrate.sh`。
+
 ## 1. 推送发布分支
 
 当前 `origin` 已经是：

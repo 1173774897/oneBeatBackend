@@ -5,47 +5,56 @@ golang-migrate 管理表结构。
 
 ## 本地启动
 
-需要 Go 1.22+、Docker 与 OpenSSL。首次启动先创建本地数据库配置：
+需要 Go 1.22+、Docker 与 OpenSSL。Vultr 已部署时，完整说明（与线网差异、日常循环、何时推
+`staging`）见 [部署文档 · 本地开发环境](docs/deployment.md#本地开发环境)。
+
+首次准备：
 
 ```bash
 cd /Users/lizhe/work/oneBeatBackend
 
-cp deploy/.env.database.example deploy/.env.database
-cp deploy/.env.test.example deploy/.env.test
+chmod +x scripts/bootstrap-local-env.sh scripts/dev-db-migrate.sh scripts/generate-dev-certs.sh
+./scripts/bootstrap-local-env.sh
 
-# 将三个示例密码替换为不同的随机值，并保证 .env.test 中的密码与测试密码一致。
-openssl rand -hex 32
-
-docker compose -f deploy/docker-compose.database.yml up -d --wait
-
-# 本地仓库中的迁移目录位于项目根目录，因此直接运行迁移镜像。
-docker run --rm \
-  --network onebeat-backend \
-  --env-file deploy/.env.test \
-  -v "$PWD/migrations:/migrations:ro" \
-  --entrypoint /bin/sh \
-  migrate/migrate:v4.19.1 \
-  -ec 'exec migrate -path=/migrations -database "$DATABASE_URL" up'
+./scripts/compose.sh -f deploy/docker-compose.database.yml up -d --wait
+./scripts/dev-db-migrate.sh
+./scripts/generate-dev-certs.sh
 ```
 
-PostgreSQL 只映射到本机 `127.0.0.1:5432`，不会监听公网地址。然后生成仅用于本地开发的
-自签名证书并启动 API：
+PostgreSQL 只映射到本机 `127.0.0.1:5432`。收藏小铺秘密（华为 Client Secret、pepper 等）见
+[deploy/secrets/README.md](deploy/secrets/README.md)：
 
 ```bash
-chmod +x scripts/generate-dev-certs.sh
-./scripts/generate-dev-certs.sh
+./scripts/init-local-secrets.sh
+# 编辑 deploy/secrets/test.env 与 deploy/secrets/test/*.json
 
-DATABASE_URL='postgres://onebeat_test:<测试密码>@127.0.0.1:5432/onebeat_test?sslmode=disable' \
-  go run ./cmd/api
+./scripts/run-api-dev.sh
 ```
+
+`run-api-dev.sh` 会打印环境摘要、Postgres 探测、`go build -v` 编译过程，再启动
+`bin/onebeat-api-dev`；连库与服务日志仍为应用输出的 JSON 行。若需明文 HTTP：
+`STORE_API_ADDR=:8080 STORE_API_INSECURE_HTTP=1 ./scripts/run-api-dev.sh`。
 
 服务默认监听 `https://localhost:8443`。自签名证书不受系统信任，因此命令行联调需加 `-k`：
 
 ```bash
 curl -k https://localhost:8443/api/v1/test
 curl -k https://localhost:8443/api/v1/database/test
+curl -k https://localhost:8443/api/v1/store/bootstrap
 curl -k https://localhost:8443/healthz
 ```
+
+登录用户、验单和恢复购买接口分别为：
+
+```text
+POST /api/v1/auth/huawei
+POST /api/v1/iap/purchases/verify
+POST /api/v1/iap/purchases/restore
+```
+
+这三项依赖真实华为 Account/IAP 凭据，不能用探活 curl 伪造成功。启动前尤其要确认
+`HUAWEI_IAP_PRIVATE_KEY` 来自 API Console 服务账号 JSON 且为 RSA 私钥；完整字段映射和检查命令见
+[运行时秘密说明](deploy/secrets/README.md#华为-iap-服务账号三项字段怎么填)。
 
 测试接口返回示例：
 
@@ -75,6 +84,12 @@ curl -k https://localhost:8443/healthz
 | `APP_VERSION` | `dev` | 构建版本，CI 中为提交短 SHA |
 | `DATABASE_URL` | 无 | PostgreSQL 连接 URL，必须提供 |
 
+收藏小铺的 Account/IAP/会话秘密见 `deploy/secrets/test.env.example` 与
+[deploy/secrets/README.md](deploy/secrets/README.md)。中国区 IAP Order/Subscription 根地址固定在代码中，
+不通过环境变量配置；站点选择以华为官方
+[IAP 公共说明](https://developer.huawei.com/consumer/cn/doc/HMSCore-References-V5/api-common-statement-0000001050986127-V5)
+为准。
+
 若只是排查本机网络，可临时使用明文模式：
 
 ```bash
@@ -89,8 +104,8 @@ STORE_API_ADDR=:8080 STORE_API_INSECURE_HTTP=1 go run ./cmd/api
 go test ./...
 ```
 
-接口单元测试使用数据库替身，不要求本机运行 PostgreSQL；能够验证 HTTPS 请求、数据库状态
-响应、方法限制和安全响应头。
+接口单元测试使用数据库替身，不要求本机运行 PostgreSQL；能够验证 HTTPS 请求、数据库状态、
+匿名商店目录、默认免费权益、方法限制和安全响应头。
 
 ## Docker
 
@@ -111,3 +126,8 @@ PostgreSQL 容器中。
 `8443`。镜像存储在 GitHub Container Registry。Vultr 初始化、GitHub Secrets、证书权限、
 验证和回滚步骤见
 [部署文档](docs/deployment.md)。
+
+## 设计文档
+
+- [收藏小铺系统设计](docs/store-system-design.md)：前后端分工、Huawei IAP/Account Kit
+  接入边界、权益规则、接口、数据库表和私密配置方案。

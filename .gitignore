@@ -8,6 +8,13 @@
 deploy/.env.database
 deploy/.env.prod
 deploy/.env.test
+deploy/.env.local
 !deploy/.env.database.example
 !deploy/.env.prod.example
 !deploy/.env.test.example
+deploy/secrets/test.env
+deploy/secrets/prod.env
+deploy/secrets/test/redemption_codes.json
+deploy/secrets/prod/redemption_codes.json
+!deploy/secrets/test/*.example
+!deploy/secrets/prod/*.example

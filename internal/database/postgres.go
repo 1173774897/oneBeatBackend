@@ -62,6 +62,11 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
+// Pool exposes the shared pool to domain repositories while Store retains lifecycle ownership.
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
 // Status verifies both connectivity and that golang-migrate initialized the schema.
 func (s *Store) Status(ctx context.Context) (Status, error) {
 	var status Status

@@ -9,15 +9,20 @@ services:
     ports:
       - "443:8443"
     env_file:
-      - ./.env.prod
+      - path: ./.env.prod
+        required: true
+      - path: ./secrets/prod.env
+        required: false
     environment:
       APP_ENV: "prod"
       STORE_API_ADDR: ":8443"
       STORE_API_TLS_CERT: "/certs/fullchain.pem"
       STORE_API_TLS_KEY: "/certs/privkey.pem"
+      STORE_SECRETS_DIR: "/run/secrets"
     volumes:
       - ./certs/prod:/certs:ro
       - ./data/prod:/data
+      - ./secrets/prod:/run/secrets:ro
     networks:
       - onebeat-backend
     read_only: true

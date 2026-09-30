@@ -10,8 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"onebeat/store-api/internal/auth"
+	"onebeat/store-api/internal/config"
 	"onebeat/store-api/internal/database"
 	"onebeat/store-api/internal/httpapi"
+	huawei_iap "onebeat/store-api/internal/huawei/iap"
+	"onebeat/store-api/internal/store/catalog"
+	"onebeat/store-api/internal/store/repository"
+	storeservice "onebeat/store-api/internal/store/service"
 )
 
 const (
@@ -26,6 +32,10 @@ func main() {
 		"environment", environment,
 		"version", version,
 	)
+	if err := catalog.Validate(); err != nil {
+		logger.Error("store catalog validation failed", "error", err)
+		os.Exit(1)
+	}
 
 	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), databaseStartupTimeout)
 	store, err := database.Open(databaseContext, os.Getenv("DATABASE_URL"))
@@ -37,9 +47,49 @@ func main() {
 	defer store.Close()
 	logger.Info("database connection established")
 
+	storeConfig, err := config.LoadStoreConfig(environment)
+	if err != nil {
+		logger.Error("store configuration is invalid", "error", err)
+		os.Exit(1)
+	}
+	huaweiHTTPClient := &http.Client{Timeout: 10 * time.Second}
+	huaweiIdentityVerifier := auth.NewHuaweiIDVerifier(huaweiHTTPClient, storeConfig.HuaweiClientID)
+	huaweiIdentityAuthenticator := auth.NewHuaweiAccountAuthenticator(
+		huaweiHTTPClient,
+		storeConfig.HuaweiClientID,
+		storeConfig.HuaweiAccountClientSecret,
+		huaweiIdentityVerifier,
+	)
+	huaweiIAPClient, err := huawei_iap.NewClient(huaweiHTTPClient, huawei_iap.Config{
+		PrivateKeyPEM: storeConfig.HuaweiIAPPrivateKey,
+		KeyID:         storeConfig.HuaweiIAPKeyID,
+		IssuerID:      storeConfig.HuaweiIAPIssuerID,
+		Environment:   storeConfig.HuaweiIAPEnvironment,
+		ApplicationID: config.HuaweiApplicationID,
+		PackageName:   config.HuaweiPackageName,
+	})
+	if err != nil {
+		logger.Error("Huawei IAP configuration is invalid", "error", err)
+		os.Exit(1)
+	}
+	storeRepository := repository.New(store.Pool())
+	storeService := storeservice.New(
+		storeRepository,
+		huaweiIAPClient,
+		storeConfig.PurchaseBindingSecret,
+		storeConfig.PurchaseTokenEncryptionKey,
+	)
+	storeServices := &httpapi.StoreServices{
+		HuaweiIdentityAuthenticator: huaweiIdentityAuthenticator,
+		UserRepository:              storeRepository,
+		SessionManager:              auth.NewSessionManager(storeConfig.JWTSigningKey, storeConfig.SessionTTL),
+		StoreService:                storeService,
+		AccountUnionIDPepper:        storeConfig.AccountUnionIDPepper,
+	}
+
 	server := &http.Server{
 		Addr:              envOrDefault("STORE_API_ADDR", ":8443"),
-		Handler:           httpapi.NewHandler(logger, environment, version, store),
+		Handler:           httpapi.NewHandlerWithStoreServices(logger, environment, version, store, storeServices),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

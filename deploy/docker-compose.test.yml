@@ -9,15 +9,20 @@ services:
     ports:
       - "8443:8443"
     env_file:
-      - ./.env.test
+      - path: ./.env.test
+        required: true
+      - path: ./secrets/test.env
+        required: false
     environment:
       APP_ENV: "test"
       STORE_API_ADDR: ":8443"
       STORE_API_TLS_CERT: "/certs/fullchain.pem"
       STORE_API_TLS_KEY: "/certs/privkey.pem"
+      STORE_SECRETS_DIR: "/run/secrets"
     volumes:
       - ./certs/test:/certs:ro
       - ./data/test:/data
+      - ./secrets/test:/run/secrets:ro
     networks:
       - onebeat-backend
     read_only: true
