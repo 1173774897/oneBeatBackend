@@ -88,6 +88,7 @@ func NewHandlerWithStoreServices(
 	mux.HandleFunc("/api/v1/auth/huawei", postOnly(huaweiAuthHandler(logger, services)))
 	mux.HandleFunc("/api/v1/iap/purchases/verify", postOnly(verifyPurchaseHandler(logger, services)))
 	mux.HandleFunc("/api/v1/iap/purchases/restore", postOnly(restorePurchasesHandler(logger, services)))
+	mux.HandleFunc("/api/v1/webhooks/huawei/iap", postOnly(huaweiIAPWebhookHandler(logger, environment, services)))
 	mux.HandleFunc("/", notFoundHandler)
 	return requestMiddleware(logger, mux)
 }
@@ -195,6 +196,44 @@ func verifyPurchaseHandler(logger *slog.Logger, services *StoreServices) http.Ha
 			logPurchaseOperationFailure(logger, "verify", input.ProductID, len(input.PurchaseData), err)
 		}
 		writeStoreResult(w, bootstrap, err)
+	}
+}
+
+func huaweiIAPWebhookHandler(logger *slog.Logger, environment string, services *StoreServices) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if services == nil || services.StoreService == nil {
+			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50301, Message: "store service is not configured"})
+			return
+		}
+		rawBody, err := io.ReadAll(io.LimitReader(r.Body, maximumJSONBody))
+		if err != nil || len(rawBody) == 0 {
+			writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid request"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
+		defer cancel()
+		err = services.StoreService.HandleHuaweiIAPWebhook(ctx, environment, rawBody)
+		if err != nil {
+			switch {
+			case errors.Is(err, storeservice.ErrWebhookInvalidSignature), errors.Is(err, storeservice.ErrWebhookInvalidPayload):
+				writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid Huawei notification"})
+			case errors.Is(err, storeservice.ErrWebhookEnvironment):
+				writeJSON(w, http.StatusUnprocessableEntity, responseEnvelope{Code: 42231, Message: "notification environment does not match server"})
+			case errors.Is(err, storeservice.ErrWebhookUnknownOrder):
+				// Acknowledge so Huawei does not retry forever; client restore can link the order later.
+				if logger != nil {
+					logger.Warn("huawei iap webhook order not linked", "reason", err.Error())
+				}
+				writeJSON(w, http.StatusOK, responseEnvelope{Code: 0, Message: "ok"})
+			default:
+				if logger != nil {
+					logger.Warn("huawei iap webhook processing failed", "reason", err.Error())
+				}
+				writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50321, Message: "notification processing failed"})
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, responseEnvelope{Code: 0, Message: "ok"})
 	}
 }
 

@@ -20,12 +20,15 @@ var (
 
 type IAPClient interface {
 	DecodePurchaseData(string) (huawei_iap.PurchaseReference, error)
+	VerifyNotification(string) (huawei_iap.NotificationPayload, error)
 	QueryOrder(context.Context, string, string) (huawei_iap.PurchaseOrderPayload, error)
 	QuerySubscription(context.Context, string, string) (huawei_iap.SubGroupStatusPayload, error)
 	ConfirmOrder(context.Context, string, string) error
 	ConfirmSubscription(context.Context, string, string) error
 	ValidateOrder(huawei_iap.PurchaseOrderPayload, string, int, string) error
 	ValidateSubscription(huawei_iap.SubGroupStatusPayload, string, string) error
+	NotificationEnvironmentMatches(string) bool
+	NotificationApplicationMatches(string) bool
 }
 
 type Service struct {
@@ -92,10 +95,17 @@ func (s *Service) RestorePurchases(ctx context.Context, userID string, purchases
 	if len(purchases) == 0 || len(purchases) > 50 {
 		return catalog.Bootstrap{}, fmt.Errorf("%w: restore batch size must be between 1 and 50", ErrInvalidPurchase)
 	}
+	successCount := 0
+	var lastErr error
 	for _, purchase := range purchases {
 		if _, err := s.VerifyPurchase(ctx, userID, purchase); err != nil {
-			return catalog.Bootstrap{}, err
+			lastErr = err
+			continue
 		}
+		successCount++
+	}
+	if successCount == 0 && lastErr != nil {
+		return catalog.Bootstrap{}, lastErr
 	}
 	return s.Bootstrap(ctx, userID)
 }

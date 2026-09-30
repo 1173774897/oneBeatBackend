@@ -326,6 +326,15 @@ func (c *Client) environmentMatches(value string) bool {
 	return value == "NORMAL" || value == "PRODUCTION"
 }
 
+func (c *Client) NotificationEnvironmentMatches(value string) bool {
+	return c.environmentMatches(value)
+}
+
+func (c *Client) NotificationApplicationMatches(applicationID string) bool {
+	applicationID = strings.TrimSpace(applicationID)
+	return applicationID == "" || applicationID == c.applicationID
+}
+
 func (c *Client) validateDeveloperPayload(orderPayload string, expected string) error {
 	if orderPayload == expected {
 		return nil

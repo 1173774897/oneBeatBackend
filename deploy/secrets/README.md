@@ -131,6 +131,21 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate
 
 Actions 只部署镜像与迁移，**不会**复制 `secrets/`；改秘密后只需 scp + 上述 recreate，不必重新 push。
 
+## AGC 关键事件通知（退款 / 撤销 webhook）
+
+测试环境在 **AppGallery Connect → 盈利 → 应用内购买 → 事件通知** 配置：
+
+| 项 | 测试 staging 值 |
+| --- | --- |
+| 通知 URL | `https://onebeatapistaging.liluanxin.com:8443/api/v1/webhooks/huawei/iap` |
+| 方法 | `POST`，JSON 体 `{"jwsNotification":"..."}` |
+| 与 API 环境 | `APP_ENV=test` + `HUAWEI_IAP_ENVIRONMENT=sandbox`，勿指向生产库 |
+
+联调前核对：URL 公网 HTTPS 可达、事件类型包含退款/撤销/订阅状态变更（以 AGC 当前勾选项为准）、
+沙盒与 staging secrets 一致。服务端验签 JWS → `notificationRequestId` 幂等写入 `iap_webhook_events`
+→ 查华为订单/订阅 → 更新 `iap_orders` 与 `entitlement_grants`。若订单尚未在 OneBeat 落库，会记
+`order not linked` 并返回 HTTP 200；用户可在客户端点 **恢复购买** 补链后再收后续通知。
+
 ## Docker Compose
 
 - `env_file`：`./secrets/test.env` 或 `./secrets/prod.env`（`required: false`）

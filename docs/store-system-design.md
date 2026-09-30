@@ -777,7 +777,7 @@ digest = HMAC-SHA256(REDEMPTION_CODE_PEPPER, normalizedCode)
 
 本节按「本地可运行 → 沙盒联调 → 生产上线」整理。基础设施（本地 Postgres、Vultr 测试/生产 API、
 HTTPS）见 [deployment.md](deployment.md)。目录、事实表、登录、会话、bootstrap、验单、恢复购买和
-确认发货已落地；关键事件通知、定时对账、口令活动和限免活动仍是后续阶段。
+确认发货与华为关键事件 webhook 已落地；定时对账、口令活动和限免活动仍是后续阶段。
 
 ### 13.1 当前仓库已具备
 
@@ -789,6 +789,7 @@ HTTPS）见 [deployment.md](deployment.md)。目录、事实表、登录、会�
 | 运行时秘密目录约定 | §10.2 `/opt/onebeatbackend/secrets/{prod,test}/` |
 | Account Kit + OneBeat 会话 | `internal/auth/`、`POST /api/v1/auth/huawei` |
 | IAP 服务端验单、恢复、确认发货 | `internal/huawei/`、`internal/store/`、`/api/v1/iap/purchases/*` |
+| 华为关键事件 webhook（验签、幂等、查单收权） | `POST /api/v1/webhooks/huawei/iap`、`iap_webhook_events` |
 
 ### 13.2 华为侧：平台要开通什么、拿回什么
 
@@ -820,17 +821,23 @@ HTTPS）见 [deployment.md](deployment.md)。目录、事实表、登录、会�
 | 配置订阅 `onebeat.pass.monthly`（自动续费） | 订阅组/续费规则 | 月卡 |
 | 配置 7 个非消耗型商品 | 类型 = 非消耗型 | 角色、场景 |
 | 配置沙盒测试账号 | 测试华为账号列表 | 沙盒购买 |
-| 在 API Console 创建并下载服务账号 JSON | `private_key` → `HUAWEI_IAP_PRIVATE_KEY`；`key_id` → `HUAWEI_IAP_KEY_ID`；`sub_account` → `HUAWEI_IAP_ISSUER_ID` | PS256 服务端鉴权、查单、确认发货 |
+| AGC → 应用内支付 → **配置密钥**（EC P-256 `.p8`） | `HUAWEI_IAP_PRIVATE_KEY` / `KEY_ID` / `ISSUER_ID` | ES256 服务端 JWT（`aud=iap-v1`）、查单、确认发货、**通知 JWS 验签** |
 | 配置 **关键事件通知** URL | — | 见下表 |
 
 | 环境 | 通知 URL（HTTPS 公网可达） |
 | --- | --- |
-| 测试 | `https://<测试域名>:8443/api/v1/webhooks/huawei/iap` |
+| 测试 | `https://onebeatapistaging.liluanxin.com:8443/api/v1/webhooks/huawei/iap` |
 | 生产 | `https://<生产域名>/api/v1/webhooks/huawei/iap` |
 
-本地 `localhost` 无法直接收华为回调；开发期可在 **Vultr staging** 联调 webhook，或临时隧道。
-生产与测试通知、密钥、数据库 **不得混用**（§6.5、§11）。当前 webhook 路由尚未开放，配置通知地址
-不会代替后端实现；接入事件 payload 前必须继续以对应的华为官方通知文档为准。
+**AGC 测试环境核对清单（退款/撤销联调前）：**
+
+1. 通知 URL 与上表一致，证书链可被华为访问（staging 使用 `:8443`）。
+2. 勾选与联调相关的事件类型（新购、续费、过期、**退款/撤销**等；以 AGC 当前选项为准）。
+3. 沙盒通知只打到 `APP_ENV=test` 且 `HUAWEI_IAP_ENVIRONMENT=sandbox` 的 API；勿与生产库混用。
+4. 通知体为 `{"jwsNotification":"<JWS>"}`；服务端对 JWS 验签后按 `notificationRequestId` 幂等落库，再查华为更新权益。
+
+本地 `localhost` 无法直接收华为回调；开发期在 **Vultr staging** 联调 webhook，或临时隧道。
+生产与测试通知、密钥、数据库 **不得混用**（§6.5、§11）。
 
 #### C. 客户端侧（与华为并行）
 
@@ -952,7 +959,8 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 
 自动化验证现状：后端 `go test ./...` 通过，前端 debug HAP 构建通过。
 
-尚未实现且不能以本地假数据替代的闭环：华为关键事件通知、周期对账、口令兑换和活动限免。当前
+尚未实现且不能以本地假数据替代的闭环：周期对账、口令兑换和活动限免。华为关键事件通知已通过
+`POST /api/v1/webhooks/huawei/iap` 接入。当前
 没有配置活动口令或限免窗口，因此不影响先完成 Account Kit/IAP 沙盒购买联调。
 
 联调前还有一个硬性配置检查：`HUAWEI_IAP_PRIVATE_KEY` 必须替换为 API Console 服务账号 JSON 中的
