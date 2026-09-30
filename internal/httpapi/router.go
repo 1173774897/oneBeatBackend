@@ -217,7 +217,20 @@ func restorePurchasesHandler(services *StoreServices) http.HandlerFunc {
 
 func writeStoreResult(w http.ResponseWriter, bootstrap catalog.Bootstrap, err error) {
 	if errors.Is(err, storeservice.ErrInvalidPurchase) {
-		writeJSON(w, http.StatusUnprocessableEntity, responseEnvelope{Code: 42231, Message: "purchase verification failed"})
+		message := "purchase verification failed"
+		code := 42231
+		if err != nil {
+			detail := err.Error()
+			switch {
+			case strings.Contains(detail, "account binding"):
+				message = "purchase account binding does not match"
+				code = 42232
+			case strings.Contains(detail, "environment does not match"):
+				message = "purchase environment does not match server"
+				code = 42231
+			}
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, responseEnvelope{Code: code, Message: message})
 		return
 	}
 	if errors.Is(err, storeservice.ErrHuaweiUnavailable) {

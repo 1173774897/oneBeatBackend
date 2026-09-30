@@ -262,8 +262,8 @@ func (c *Client) ValidateOrder(order PurchaseOrderPayload, productID string, pro
 	if order.ProductID != productID || int(order.ProductType) != productType {
 		return errors.New("purchase product does not match request")
 	}
-	if order.DeveloperPayload != developerPayload {
-		return errors.New("purchase account binding does not match")
+	if err := c.validateDeveloperPayload(order.DeveloperPayload, developerPayload); err != nil {
+		return err
 	}
 	if !c.environmentMatches(order.Environment) {
 		return errors.New("purchase environment does not match server environment")
@@ -282,8 +282,8 @@ func (c *Client) ValidateSubscription(subscription SubGroupStatusPayload, produc
 	if order.ProductID != productID || int(order.ProductType) != 2 {
 		return errors.New("subscription product does not match request")
 	}
-	if order.DeveloperPayload != developerPayload {
-		return errors.New("subscription account binding does not match")
+	if err := c.validateDeveloperPayload(order.DeveloperPayload, developerPayload); err != nil {
+		return err
 	}
 	if order.PurchaseOrderID == "" ||
 		(subscription.LastSubscriptionStatus.PurchaseToken == "" && order.PurchaseToken == "") {
@@ -305,6 +305,17 @@ func (c *Client) environmentMatches(value string) bool {
 		return value == "SANDBOX"
 	}
 	return value == "NORMAL" || value == "PRODUCTION"
+}
+
+func (c *Client) validateDeveloperPayload(orderPayload string, expected string) error {
+	if orderPayload == expected {
+		return nil
+	}
+	// Sandbox orders created before client-side developerPayload wiring may return empty.
+	if c.environment == "sandbox" && strings.TrimSpace(orderPayload) == "" {
+		return nil
+	}
+	return errors.New("purchase account binding does not match")
 }
 
 func (c *Client) confirm(ctx context.Context, path string, orderID string, purchaseToken string) error {

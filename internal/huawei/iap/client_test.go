@@ -2,6 +2,36 @@ package iap
 
 import "testing"
 
+func TestValidateOrderAllowsEmptyDeveloperPayloadInSandbox(t *testing.T) {
+	client := &Client{
+		environment: "sandbox", applicationID: "app-id", packageName: "com.example.app",
+	}
+	order := PurchaseOrderPayload{
+		ApplicationID: "app-id", PackageName: "com.example.app",
+		ProductID: "onebeat.character.cloud", ProductType: 1,
+		PurchaseOrderID: "order-id", PurchaseToken: "token",
+		Environment: "SANDBOX",
+	}
+	if err := client.ValidateOrder(order, "onebeat.character.cloud", 1, "expected-binding"); err != nil {
+		t.Fatalf("validate sandbox legacy order: %v", err)
+	}
+}
+
+func TestValidateOrderRejectsMismatchedDeveloperPayloadInProduction(t *testing.T) {
+	client := &Client{
+		environment: "production", applicationID: "app-id", packageName: "com.example.app",
+	}
+	order := PurchaseOrderPayload{
+		ApplicationID: "app-id", PackageName: "com.example.app",
+		ProductID: "onebeat.character.cloud", ProductType: 1,
+		PurchaseOrderID: "order-id", PurchaseToken: "token",
+		DeveloperPayload: "other-binding", Environment: "NORMAL",
+	}
+	if err := client.ValidateOrder(order, "onebeat.character.cloud", 1, "expected-binding"); err == nil {
+		t.Fatal("expected binding mismatch in production")
+	}
+}
+
 func TestValidateSubscriptionUsesTopLevelEnvironmentAndStateToken(t *testing.T) {
 	client := &Client{
 		environment: "sandbox", applicationID: "app-id", packageName: "com.example.app",

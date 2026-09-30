@@ -111,7 +111,11 @@ func (s *Service) verifyNonConsumable(
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHuaweiUnavailable, err)
 	}
-	if err := s.iap.ValidateOrder(order, item.HuaweiProductID, 1, developerPayload); err != nil {
+	expectedProductType := reference.ProductType
+	if expectedProductType <= 0 {
+		expectedProductType = 1
+	}
+	if err := s.iap.ValidateOrder(order, item.HuaweiProductID, expectedProductType, developerPayload); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidPurchase, err)
 	}
 	if order.PurchaseOrderID != reference.PurchaseOrderID || order.PurchaseToken != reference.PurchaseToken {
