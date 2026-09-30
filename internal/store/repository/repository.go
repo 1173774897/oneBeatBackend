@@ -270,7 +270,7 @@ func upsertOrder(ctx context.Context, tx pgx.Tx, record OrderRecord, now time.Ti
 			 developer_payload, status, purchased_at, expires_at, acknowledged_at,
 			 verified_at, receipt_snapshot)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-			CASE WHEN $13 THEN $14 ELSE NULL END, $14, $15)
+			(CASE WHEN $13::boolean THEN $14::timestamptz END), $14::timestamptz, $15::jsonb)
 		ON CONFLICT (huawei_order_id) DO UPDATE SET
 			status = EXCLUDED.status,
 			expires_at = EXCLUDED.expires_at,
