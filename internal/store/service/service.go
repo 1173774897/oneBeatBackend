@@ -92,8 +92,8 @@ func (s *Service) VerifyPurchase(ctx context.Context, userID string, input Verif
 }
 
 func (s *Service) RestorePurchases(ctx context.Context, userID string, purchases []VerifyInput) (catalog.Bootstrap, error) {
-	if len(purchases) == 0 || len(purchases) > 50 {
-		return catalog.Bootstrap{}, fmt.Errorf("%w: restore batch size must be between 1 and 50", ErrInvalidPurchase)
+	if len(purchases) > 50 {
+		return catalog.Bootstrap{}, fmt.Errorf("%w: restore batch size must be between 0 and 50", ErrInvalidPurchase)
 	}
 	successCount := 0
 	var lastErr error
@@ -104,7 +104,17 @@ func (s *Service) RestorePurchases(ctx context.Context, userID string, purchases
 		}
 		successCount++
 	}
-	if successCount == 0 && lastErr != nil {
+	reconcileErr := s.ReconcileStoredPurchases(ctx, userID)
+	if reconcileErr != nil && successCount == 0 {
+		stored, listErr := s.repository.ListStoredPurchasesForUser(ctx, userID)
+		if listErr != nil || len(stored) == 0 {
+			if lastErr != nil {
+				return catalog.Bootstrap{}, lastErr
+			}
+			return catalog.Bootstrap{}, reconcileErr
+		}
+	}
+	if successCount == 0 && len(purchases) > 0 && lastErr != nil && reconcileErr != nil {
 		return catalog.Bootstrap{}, lastErr
 	}
 	return s.Bootstrap(ctx, userID)

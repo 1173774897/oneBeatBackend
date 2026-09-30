@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -43,4 +44,25 @@ func EncryptToken(key []byte, token string) ([]byte, error) {
 		return nil, fmt.Errorf("create token nonce: %w", err)
 	}
 	return gcm.Seal(nonce, nonce, []byte(token), nil), nil
+}
+
+func DecryptToken(key []byte, ciphertext []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("create token cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("create token GCM: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return "", errors.New("token ciphertext is too short")
+	}
+	nonce, payload := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	plain, err := gcm.Open(nil, nonce, payload, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt token: %w", err)
+	}
+	return string(plain), nil
 }
