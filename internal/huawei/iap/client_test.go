@@ -70,7 +70,7 @@ func TestValidateSubscriptionUsesTopLevelEnvironmentAndStateToken(t *testing.T) 
 	}
 }
 
-func TestQuerySubscriptionSendsSubscriptionIDInsteadOfOrderID(t *testing.T) {
+func TestQuerySubscriptionSendsPurchaseOrderIDAndToken(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -91,14 +91,11 @@ func TestQuerySubscriptionSendsSubscriptionIDInsteadOfOrderID(t *testing.T) {
 		keyID:      "key-id", issuerID: "issuer-id", applicationID: "app-id",
 		now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
-	_, _ = client.QuerySubscription(context.Background(), "onebeat.pass.monthly", "token-1")
-	if body["subscriptionId"] != "onebeat.pass.monthly" {
-		t.Fatalf("subscriptionId = %q", body["subscriptionId"])
+	_, _ = client.QuerySubscription(context.Background(), "order-abc", "token-1")
+	if body["purchaseOrderId"] != "order-abc" {
+		t.Fatalf("purchaseOrderId = %q", body["purchaseOrderId"])
 	}
 	if body["purchaseToken"] != "token-1" {
 		t.Fatalf("purchaseToken = %q", body["purchaseToken"])
-	}
-	if _, exists := body["purchaseOrderId"]; exists {
-		t.Fatal("QuerySubscription must not send purchaseOrderId")
 	}
 }

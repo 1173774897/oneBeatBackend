@@ -145,7 +145,7 @@ func (s *Service) processSubscriptionNotification(
 		return fmt.Errorf("%w: unknown subscription product %s", ErrInvalidPurchase, productID)
 	}
 	meta := payload.NotificationMetaData
-	preview, err := s.iap.QuerySubscription(ctx, item.HuaweiProductID, meta.PurchaseToken)
+	preview, err := s.iap.QuerySubscription(ctx, meta.PurchaseOrderID, meta.PurchaseToken)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHuaweiUnavailable, err)
 	}

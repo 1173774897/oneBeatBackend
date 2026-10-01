@@ -60,7 +60,7 @@ func (s *Service) ProcessTradeOrder(ctx context.Context, trade huawei_iap.TradeO
 	effect := "REVOKE"
 	refundType := "UNKNOWN"
 	if item.IAPProductType == catalog.ProductAutoRenewable {
-		snapshot, err := s.iap.QuerySubscription(ctx, item.HuaweiProductID, trade.PurchaseToken)
+		snapshot, err := s.iap.QuerySubscription(ctx, orderID, trade.PurchaseToken)
 		if err != nil {
 			effect = "PENDING"
 		} else {

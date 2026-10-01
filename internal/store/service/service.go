@@ -197,7 +197,7 @@ func (s *Service) verifySubscriptionFromSource(
 	developerPayload string,
 	source string,
 ) error {
-	subscription, err := s.iap.QuerySubscription(ctx, item.HuaweiProductID, reference.PurchaseToken)
+	subscription, err := s.iap.QuerySubscription(ctx, reference.PurchaseOrderID, reference.PurchaseToken)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHuaweiUnavailable, err)
 	}

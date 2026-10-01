@@ -245,16 +245,13 @@ func (c *Client) QueryOrder(ctx context.Context, orderID string, purchaseToken s
 	return order, nil
 }
 
-func (c *Client) QuerySubscription(ctx context.Context, subscriptionID string, purchaseToken string) (SubGroupStatusPayload, error) {
+func (c *Client) QuerySubscription(ctx context.Context, purchaseOrderID string, purchaseToken string) (SubGroupStatusPayload, error) {
 	var response struct {
 		ResponseCode      string `json:"responseCode"`
 		ResponseMessage   string `json:"responseMessage"`
 		JWSSubGroupStatus string `json:"jwsSubGroupStatus"`
 	}
-	if err := c.callJSON(ctx, subscriptionStatusPath, map[string]string{
-		"subscriptionId": subscriptionID,
-		"purchaseToken":  purchaseToken,
-	}, &response); err != nil {
+	if err := c.call(ctx, subscriptionStatusPath, purchaseOrderID, purchaseToken, &response); err != nil {
 		return SubGroupStatusPayload{}, err
 	}
 	if response.ResponseCode != "0" || response.JWSSubGroupStatus == "" {

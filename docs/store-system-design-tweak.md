@@ -36,12 +36,12 @@
 
 | 接口 | 正确入参 | 用途 |
 | --- | --- | --- |
-| `QuerySubscription` | `subscriptionId + purchaseToken` | 查询自动续费订阅当前状态；`subscriptionId` 对应 `huawei_product_id` |
+| `QuerySubscription` | `purchaseOrderId + purchaseToken` | 查询自动续费订阅当前状态（Harmony 服务端 API 必填二者） |
 | `QueryOrder` | `purchaseOrderId + purchaseToken` | 查询消耗型、非消耗型或非续期订阅的单笔订单状态 |
 
-不得把通知中的 `purchaseOrderId` 作为 `QuerySubscription` 的 `subscriptionId`。通知中的
-`purchaseOrderId` 用于交易幂等、财务流水定位和发货确认；订阅状态查询使用商品对应的
-Huawei `subscriptionId`。
+通知与客户端 JWS 里的 `purchaseOrderId` 用于调用 `QuerySubscription` / `QueryOrder` 与交易幂等。
+通知里的 `subscriptionId` 对应商品 `huawei_product_id`，**不能**当作 `purchaseOrderId` 传入状态查询。
+不得拿 `QuerySubscription` 返回的 `lastPurchaseOrder.purchaseOrderId` 与 `QueryOrder(退款单号)` 的结果做相等性对账。
 
 服务端处理顺序为：
 
@@ -383,7 +383,7 @@ checkpoint 必须区分“时间窗口已经完成”和“窗口内处理到某
 
 1. 先按事件 ID 插入 `iap_webhook_events`；重复事件直接返回成功。
 2. 验签失败时保存失败状态，不修改业务表。
-3. 使用商品的 `huawei_product_id` 作为 `subscriptionId`，与通知中的 `purchaseToken` 一起调用 `QuerySubscription`。
+3. 使用通知中的 `purchaseOrderId` 与 `purchaseToken` 调用 `QuerySubscription`。
 4. 验证应用、商品、账号绑定和环境。
 5. upsert `iap_subscriptions`，并登记新的 `iap_subscription_tokens`。
 6. 以 `(provider, environment, purchaseOrderId, PURCHASE)` upsert 购买交易。
@@ -422,7 +422,7 @@ checkpoint 必须区分“时间窗口已经完成”和“窗口内处理到某
 恢复流程：
 
 1. 验证客户端提交的当前凭据与登录用户绑定关系。
-2. 使用商品的 `huawei_product_id` 作为 `subscriptionId`，与当前 `purchaseToken` 调用 `QuerySubscription` 获取权威快照。
+2. 使用客户端 JWS / 库内 `latest_purchase_order_id` 与当前 `purchaseToken` 调用 `QuerySubscription` 获取权威快照。
 3. 新 token 写入 `iap_subscription_tokens`，不覆盖或删除旧 token。
 4. 新订单写为新的 PURCHASE 交易和订阅周期，不修改旧交易为 `REVOKED`。
 5. 相同凭据重复恢复只执行 upsert 和刷新 `verified_at`。
@@ -594,7 +594,7 @@ iap_webhook_events               -> 按新约束重建
 
 ### 阶段 B：订阅验证与恢复购买
 
-1. 将 Huawei client 和 service interface 改为 `QuerySubscription(ctx, subscriptionID, purchaseToken)`，停止传入订单号。
+1. `QuerySubscription(ctx, purchaseOrderID, purchaseToken)` 与 Harmony 服务端 API 一致；业务层用客户端/通知/JWS 中的购买单号，勿把 `subscriptionId`（商品 ID）当 `purchaseOrderId`。
 2. 重写 `verifySubscription`，允许权威快照返回新 token 和新订单号。
 3. 删除严格要求响应 token/order 与客户端输入完全相等的错误判断，改为验证订阅关系、商品、账号绑定和环境。
 4. 删除 `persistAuthoritativeSubscription` 中订单号变化就撤销旧订单的逻辑。
@@ -641,7 +641,7 @@ iap_webhook_events               -> 按新约束重建
 3. `CANCELED_ACTIVE` 到期后月卡失效。
 4. Huawei 状态 3 归一为 `EXPIRED`，不增加本地 `GRACE` 字段或状态。
 5. `BILLING_RECOVERY` 后通过 `QuerySubscription` 确认恢复 `ACTIVE`，重新获得权益。
-6. `QuerySubscription` 使用 `subscriptionId + purchaseToken`，不发送 `purchaseOrderId`。
+6. `QuerySubscription` 使用 `purchaseOrderId + purchaseToken`（与 `QueryOrder` 请求体字段相同，语义仍是订阅快照）。
 7. token 和订单号同时变化时新增周期，不撤销旧交易。
 8. 同一恢复购买请求执行两次不产生重复交易。
 9. `USER_REFUND + ACTIVE/CANCELED_ACTIVE` 未到期时得到 `KEEP`。
