@@ -35,3 +35,32 @@ func TestAnonymousBootstrapOnlyUnlocksDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestTodayUnlocksLilRollForAnonymousUsers(t *testing.T) {
+	now := time.Date(2026, time.October, 1, 12, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+	bootstrap := AnonymousBootstrap(now)
+	if !bootstrap.Redemption.Available {
+		t.Fatal("today's redemption campaign is not available")
+	}
+	for _, item := range bootstrap.Items {
+		if item.ItemKey != "character.lilroll" {
+			continue
+		}
+		if !item.Access.Allowed || item.Access.Reason != AccessLimitedFree || item.FreeWindow == nil {
+			t.Fatalf("lilroll snapshot = %+v", item)
+		}
+		return
+	}
+	t.Fatal("lilroll is missing from catalog")
+}
+
+func TestRedemptionPassBlocksIAPPurchase(t *testing.T) {
+	now := time.Date(2026, time.October, 1, 8, 0, 0, 0, time.UTC)
+	expiresAt := now.AddDate(0, 1, 0)
+	bootstrap := AuthenticatedBootstrap(now, "binding", nil, PassSnapshot{
+		Active: true, Source: AccessRedemption, ExpiresAt: &expiresAt,
+	})
+	if bootstrap.Pass.IAPPurchaseAllowed || bootstrap.Pass.IAPPurchaseBlockedReason != IAPPurchaseBlockedGiftActive {
+		t.Fatalf("pass snapshot = %+v", bootstrap.Pass)
+	}
+}

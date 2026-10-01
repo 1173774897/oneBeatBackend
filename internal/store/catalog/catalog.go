@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = "2026-10-01.1"
+const ConfigVersion = "2026-10-01.2"
 
 const (
 	KindPass      = "PASS"
@@ -21,6 +21,10 @@ const (
 	AccessIAPPurchase = "IAP_PURCHASE"
 	AccessIAPPass     = "PASS_IAP"
 	AccessRedemption  = "PASS_REDEMPTION"
+	AccessLimitedFree = "LIMITED_FREE"
+
+	IAPPurchaseBlockedGiftActive = "ACTIVE_REDEMPTION_PASS"
+	IAPPurchaseBlockedPassActive = "ACTIVE_IAP_PASS"
 )
 
 // Item is the public, versioned configuration for one sellable or gated item.
@@ -54,11 +58,13 @@ type ItemSnapshot struct {
 }
 
 type PassSnapshot struct {
-	Active       bool       `json:"active"`
-	Source       string     `json:"source,omitempty"`
-	Status       string     `json:"status,omitempty"`
-	ExpiresAt    *time.Time `json:"expiresAt"`
-	AutoRenewing bool       `json:"autoRenewing"`
+	Active                   bool       `json:"active"`
+	Source                   string     `json:"source,omitempty"`
+	Status                   string     `json:"status,omitempty"`
+	ExpiresAt                *time.Time `json:"expiresAt"`
+	AutoRenewing             bool       `json:"autoRenewing"`
+	IAPPurchaseAllowed       bool       `json:"iapPurchaseAllowed"`
+	IAPPurchaseBlockedReason string     `json:"iapPurchaseBlockedReason,omitempty"`
 }
 
 type RedemptionSnapshot struct {
@@ -116,27 +122,12 @@ func FindByItemKey(itemKey string) (Item, bool) {
 // AnonymousBootstrap exposes only public configuration and default-free access.
 // Account-scoped grants are added by the authenticated entitlement service later.
 func AnonymousBootstrap(now time.Time) Bootstrap {
-	snapshots := make([]ItemSnapshot, 0, len(items))
-	for _, item := range items {
-		reason := AccessLocked
-		if item.DefaultFree {
-			reason = AccessDefaultFree
-		}
-		snapshots = append(snapshots, ItemSnapshot{
-			Item: item,
-			Access: Access{
-				Allowed: item.DefaultFree,
-				Reason:  reason,
-			},
-		})
-	}
-
 	return Bootstrap{
 		ServerTime:    now.UTC(),
 		ConfigVersion: ConfigVersion,
-		Pass:          PassSnapshot{},
-		Items:         snapshots,
-		Redemption:    RedemptionSnapshot{Available: false},
+		Pass:          finalizePass(PassSnapshot{}),
+		Items:         itemSnapshots(now, nil, PassSnapshot{}),
+		Redemption:    RedemptionSnapshot{Available: len(ActiveRedemptionCampaigns(now)) > 0},
 	}
 }
 
@@ -147,27 +138,55 @@ func AuthenticatedBootstrap(
 	grants map[string]Access,
 	pass PassSnapshot,
 ) Bootstrap {
-	snapshots := make([]ItemSnapshot, 0, len(items))
-	for _, item := range items {
-		access := Access{Allowed: item.DefaultFree, Reason: AccessLocked}
-		if item.DefaultFree {
-			access.Reason = AccessDefaultFree
-		}
-		if grant, ok := grants[item.ItemKey]; ok {
-			access = grant
-		} else if pass.Active && item.IncludedInPass {
-			access = Access{Allowed: true, Reason: pass.Source, ValidUntil: pass.ExpiresAt}
-		}
-		snapshots = append(snapshots, ItemSnapshot{Item: item, Access: access})
-	}
+	pass = finalizePass(pass)
 	return Bootstrap{
 		ServerTime:       now.UTC(),
 		ConfigVersion:    ConfigVersion,
 		DeveloperPayload: developerPayload,
 		Pass:             pass,
-		Items:            snapshots,
-		Redemption:       RedemptionSnapshot{Available: false},
+		Items:            itemSnapshots(now, grants, pass),
+		Redemption:       RedemptionSnapshot{Available: len(ActiveRedemptionCampaigns(now)) > 0},
 	}
+}
+
+func itemSnapshots(now time.Time, grants map[string]Access, pass PassSnapshot) []ItemSnapshot {
+	snapshots := make([]ItemSnapshot, 0, len(items))
+	for _, item := range items {
+		access := Access{Allowed: false, Reason: AccessLocked}
+		var freeWindow *FreeWindow
+		// Keep access precedence stable: permanent/default access and passes must
+		// not be relabeled as a shorter-lived promotion.
+		if item.DefaultFree {
+			access = Access{Allowed: true, Reason: AccessDefaultFree}
+		} else if pass.Active && item.IncludedInPass {
+			access = Access{Allowed: true, Reason: pass.Source, ValidUntil: pass.ExpiresAt}
+		} else if grant, ok := grants[item.ItemKey]; ok {
+			access = grant
+		} else if window, ok := CurrentFreeWindow(item.ItemKey, now); ok {
+			windowCopy := FreeWindow{StartsAt: window.StartsAt, EndsAt: window.EndsAt}
+			freeWindow = &windowCopy
+			endsAt := window.EndsAt
+			access = Access{Allowed: true, Reason: AccessLimitedFree, ValidUntil: &endsAt}
+		}
+		snapshots = append(snapshots, ItemSnapshot{Item: item, Access: access, FreeWindow: freeWindow})
+	}
+	return snapshots
+}
+
+func finalizePass(pass PassSnapshot) PassSnapshot {
+	// A live pass blocks opening a second subscription in the normal client flow.
+	// Paid Huawei orders that already completed are still verified server-side.
+	pass.IAPPurchaseAllowed = !pass.Active
+	if !pass.Active {
+		pass.IAPPurchaseBlockedReason = ""
+		return pass
+	}
+	if pass.Source == AccessRedemption {
+		pass.IAPPurchaseBlockedReason = IAPPurchaseBlockedGiftActive
+	} else {
+		pass.IAPPurchaseBlockedReason = IAPPurchaseBlockedPassActive
+	}
+	return pass
 }
 
 // Validate catches duplicate IDs and malformed IAP mappings during startup and tests.
@@ -196,5 +215,5 @@ func Validate() error {
 		}
 		productIDs[item.HuaweiProductID] = struct{}{}
 	}
-	return nil
+	return validatePromotions(itemKeys)
 }

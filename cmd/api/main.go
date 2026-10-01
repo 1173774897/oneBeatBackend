@@ -16,6 +16,7 @@ import (
 	"onebeat/store-api/internal/httpapi"
 	huawei_iap "onebeat/store-api/internal/huawei/iap"
 	"onebeat/store-api/internal/store/catalog"
+	"onebeat/store-api/internal/store/redemption"
 	"onebeat/store-api/internal/store/repository"
 	storeservice "onebeat/store-api/internal/store/service"
 )
@@ -52,6 +53,17 @@ func main() {
 		logger.Error("store configuration is invalid", "error", err)
 		os.Exit(1)
 	}
+	// Campaigns are compiled into the binary, while code digests stay in the
+	// secret mount. Refuse startup unless both sides agree exactly.
+	redemptionCodes, err := redemption.LoadCodeBook(
+		storeConfig.RedemptionCodesPath,
+		storeConfig.RedemptionCodePepper,
+		catalog.RequiredRedemptionCodeKeys(),
+	)
+	if err != nil {
+		logger.Error("redemption code configuration is invalid", "error", err)
+		os.Exit(1)
+	}
 	huaweiHTTPClient := &http.Client{Timeout: 10 * time.Second}
 	huaweiIdentityVerifier := auth.NewHuaweiIDVerifier(huaweiHTTPClient, storeConfig.HuaweiClientID)
 	huaweiIdentityAuthenticator := auth.NewHuaweiAccountAuthenticator(
@@ -79,6 +91,7 @@ func main() {
 		storeConfig.PurchaseBindingSecret,
 		storeConfig.PurchaseTokenEncryptionKey,
 	)
+	storeService.ConfigureRedemptions(redemptionCodes)
 	storeServices := &httpapi.StoreServices{
 		HuaweiIdentityAuthenticator: huaweiIdentityAuthenticator,
 		UserRepository:              storeRepository,

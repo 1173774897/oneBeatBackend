@@ -131,11 +131,8 @@ func (r *Repository) Bootstrap(
 		if sourceType == "REDEMPTION" {
 			reason = catalog.AccessRedemption
 		}
-		grants[itemKey] = catalog.Access{Allowed: true, Reason: reason, ValidUntil: endsAt}
-		if itemKey == "pass.all" {
-			pass.Active = true
-			pass.Source = reason
-			pass.ExpiresAt = endsAt
+		if itemKey != "pass.all" {
+			grants[itemKey] = catalog.Access{Allowed: true, Reason: reason, ValidUntil: endsAt}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -157,10 +154,43 @@ func (r *Repository) Bootstrap(
 	}
 	if err == nil {
 		pass.Status = status
-		pass.ExpiresAt = &expiresAt
 		pass.AutoRenewing = autoRenewing
-		if pass.Active && pass.Source == catalog.AccessIAPPurchase {
+		if expiresAt.After(now) && (status == "ACTIVE" || status == "CANCELED_ACTIVE") {
+			pass.Active = true
 			pass.Source = catalog.AccessIAPPass
+			pass.ExpiresAt = &expiresAt
+		}
+	}
+
+	// A paid pass wins if both sources overlap. Only when no active IAP pass
+	// exists do we aggregate the current redemption chain through its final month.
+	if !pass.Active {
+		var redemptionExpiresAt *time.Time
+		err = r.pool.QueryRow(ctx, `
+			SELECT max(r.grant_ends_at)
+			FROM redemptions r
+			JOIN entitlement_grants g ON g.id = r.entitlement_grant_id
+			WHERE r.user_id = $1
+			  AND g.revoked_at IS NULL
+			  AND r.chain_id IN (
+				SELECT active.chain_id
+				FROM redemptions active
+				JOIN entitlement_grants active_grant ON active_grant.id = active.entitlement_grant_id
+				WHERE active.user_id = $1
+				  AND active_grant.revoked_at IS NULL
+				  AND active.grant_starts_at <= $2
+				  AND active.grant_ends_at > $2
+			  )
+		`, userID, now).Scan(&redemptionExpiresAt)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return catalog.Bootstrap{}, fmt.Errorf("query redemption pass: %w", err)
+		}
+		if err == nil && redemptionExpiresAt != nil && redemptionExpiresAt.After(now) {
+			pass.Active = true
+			pass.Source = catalog.AccessRedemption
+			pass.Status = "ACTIVE"
+			pass.ExpiresAt = redemptionExpiresAt
+			pass.AutoRenewing = false
 		}
 	}
 

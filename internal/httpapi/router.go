@@ -85,12 +85,72 @@ func NewHandlerWithStoreServices(
 	mux.HandleFunc("/api/v1/test", getOnly(testHandler(environment, version)))
 	mux.HandleFunc("/api/v1/database/test", getOnly(databaseTestHandler(logger, store)))
 	mux.HandleFunc("/api/v1/store/bootstrap", getOnly(storeBootstrapHandler(services)))
+	mux.HandleFunc("/api/v1/store/redemptions", postOnly(redeemHandler(logger, services, newRedemptionLimiter())))
 	mux.HandleFunc("/api/v1/auth/huawei", postOnly(huaweiAuthHandler(logger, services)))
 	mux.HandleFunc("/api/v1/iap/purchases/verify", postOnly(verifyPurchaseHandler(logger, services)))
 	mux.HandleFunc("/api/v1/iap/purchases/restore", postOnly(restorePurchasesHandler(logger, services)))
 	mux.HandleFunc("/api/v1/webhooks/huawei/iap", postOnly(huaweiIAPWebhookHandler(logger, environment, services)))
 	mux.HandleFunc("/", notFoundHandler)
 	return requestMiddleware(logger, mux)
+}
+
+func redeemHandler(logger *slog.Logger, services *StoreServices, limiter *redemptionLimiter) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := requireUser(w, r, services)
+		if !ok {
+			return
+		}
+		clientIP := remoteIP(r.RemoteAddr)
+		if !limiter.Allow(userID, clientIP, time.Now()) {
+			writeJSON(w, http.StatusTooManyRequests, responseEnvelope{Code: 42901, Message: "too many failed redemption attempts"})
+			return
+		}
+		var input storeservice.RedeemInput
+		if err := decodeJSON(r, &input); err != nil {
+			writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid request"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
+		defer cancel()
+		result, err := services.StoreService.Redeem(ctx, userID, input, strings.TrimSpace(r.Header.Get("X-Request-ID")))
+		if err == nil {
+			writeJSON(w, http.StatusOK, responseEnvelope{Code: 0, Message: "ok", Data: result})
+			return
+		}
+		status, code, message := redemptionErrorResponse(err)
+		// Count only malformed or unmatched secrets. Provider failures must not lock
+		// legitimate users out; other business conflicts occur after a successful match.
+		if errors.Is(err, storeservice.ErrRedemptionInvalid) || errors.Is(err, storeservice.ErrRedemptionRequest) {
+			limiter.RecordFailure(userID, clientIP, time.Now())
+		}
+		if logger != nil {
+			logger.Info("store redemption completed", "userId", userID, "resultCode", code)
+		}
+		writeJSON(w, status, responseEnvelope{Code: code, Message: message})
+	}
+}
+
+func redemptionErrorResponse(err error) (int, int, string) {
+	switch {
+	case errors.Is(err, storeservice.ErrRedemptionRequest):
+		return http.StatusBadRequest, 40001, "invalid request"
+	case errors.Is(err, storeservice.ErrRedemptionNotStarted):
+		return http.StatusConflict, 40921, "redemption campaign has not started"
+	case errors.Is(err, storeservice.ErrRedemptionInvalid):
+		return http.StatusConflict, 40922, "redemption code is invalid or unavailable"
+	case errors.Is(err, storeservice.ErrRedemptionAccountLimit):
+		return http.StatusConflict, 40923, "redemption has already been used by this account"
+	case errors.Is(err, storeservice.ErrRedemptionGlobalLimit):
+		return http.StatusConflict, 40924, "redemption campaign quota is exhausted"
+	case errors.Is(err, storeservice.ErrRedemptionIAPActive):
+		return http.StatusConflict, 40925, "active Huawei subscription prevents redemption"
+	case errors.Is(err, storeservice.ErrRedemptionIdempotencyConflict):
+		return http.StatusConflict, 40926, "idempotency key belongs to another redemption"
+	case errors.Is(err, storeservice.ErrHuaweiUnavailable):
+		return http.StatusServiceUnavailable, 50321, "Huawei IAP is temporarily unavailable"
+	default:
+		return http.StatusServiceUnavailable, 50301, "store data unavailable"
+	}
 }
 
 func storeBootstrapHandler(services *StoreServices) http.HandlerFunc {

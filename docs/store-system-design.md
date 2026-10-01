@@ -4,17 +4,23 @@
 数据库表和运行时配置。后续实现应以本文档为准；如产品规则发生变化，应先更新本文档，
 再修改代码和数据库迁移。
 
+口令月卡与角色限免的实现细节见
+[《口令月卡与角色限免技术设计》](redemption-free-access-technical-design.md)。
+
 ## 1. 目标与已确认规则
 
 ### 1.1 畅游月卡
 
 - 通过 Huawei IAP Kit 销售按月自动续费的「畅游月卡」。
 - 用户也可以在应用内输入活动口令，领取一个自然月的非自动续费月卡权益。
+- 每次成功兑换固定赠送一个自然月；赠送月数不作为活动配置项。
+- 一个活动可以绑定多个不同口令，这些口令共享活动总额度和账号使用规则。
 - 活动口令有两种账号使用规则：
   - `ONCE_PER_ACCOUNT`：每个华为账号最多成功兑换一次。
   - `UNLIMITED_PER_ACCOUNT`：同一华为账号可以重复兑换，直到活动总兑换上限耗尽。
 - 两种活动都支持配置全局总兑换上限；不限制时使用 `null`，不要使用魔法大数字。
 - 已有正在生效的 Huawei IAP 自动续费月卡时，不允许兑换口令，避免付费时间和赠送时间重叠。
+- 已有正在生效的口令赠送月卡时，不允许发起 Huawei IAP 自动续费月卡购买。
 - 畅游月卡生效期间可以使用所有角色、所有场景和 PRO 定制鼓机。
 - 口令赠送只产生 OneBeat 业务权益，不创建 Huawei IAP 订单，也不会自动续费或扣款。
 
@@ -132,6 +138,7 @@ GroupUnionID；只有未来需要在不同开发者账号所属的应用之间�
 5. 以上均不满足：拒绝使用，原因 `LOCKED`。
 
 限免只适用于角色，不替代永久购买。限免到期后，未购买且无月卡的角色重新锁定。
+当前生效的角色限免同时对匿名用户和登录用户开放；未来限免窗口不提前对客户端展示。
 
 ## 4. 前端职责
 
@@ -283,10 +290,10 @@ developerPayload = HMAC-SHA256(PURCHASE_BINDING_SECRET, oneBeatUserId)
 4. 匹配活动后检查开始时间、结束时间和启用状态。
 5. 查询 Huawei IAP 月卡状态；`status == 1` 且 `expiresTime > now` 时拒绝兑换。这里包括正常续费，
    以及已取消自动续费但当前周期尚未结束的订阅；状态 `3` 不按当前规则授予月卡权益。
-6. 在一个事务内锁定活动全局计数和账号计数。
-7. 检查全局上限和 `ONCE_PER_ACCOUNT` 限制。
+6. 配置了运营总额度时，事务外按成功兑换记录读取近似计数；并发请求允许少量超发。
+7. 在事务内只锁定当前账号并检查 `ONCE_PER_ACCOUNT` 限制，不锁活动共享计数。
 8. 计算自然月权益区间，创建兑换记录和权益记录。
-9. 原子增加活动及账号计数，提交事务。
+9. 原子增加账号计数，提交事务。
 10. 返回新的权益快照。
 
 `UNLIMITED_PER_ACCOUNT` 允许同一账号反复兑换并叠加月份，每次成功都消耗一次全局额度。
@@ -605,8 +612,8 @@ token 应以华为实际协议为准。订单唯一性以 `huawei_order_id` 为�
 | `redeemed_count` | `bigint` | 非负，活动全局成功次数 |
 | `updated_at` | `timestamptz` | 非空 |
 
-首次兑换时惰性创建。兑换事务通过 `SELECT ... FOR UPDATE` 锁定该行，检查代码配置中的
-`maxTotalRedemptions` 后再递增。
+该表保留给历史统计或离线汇总，不参与在线额度判定。在线兑换直接按 `redemptions.campaign_key`
+读取成功记录近似计数；不获取活动级共享锁，因此高并发时总额度允许少量超发。
 
 ### 9.7 `redemption_account_usage`
 
@@ -648,7 +655,8 @@ token 应以华为实际协议为准。订单唯一性以 `huawei_order_id` 为�
 - Account Kit Client ID、预期发行方、允许的受众和官方接口地址；测试与生产按实际应用配置隔离。
 - `store_items` 的稳定 `itemKey`、类别、访问策略和是否被月卡包含。
 - `iap_products` 的 Huawei 商品 ID 和商品类型。
-- `redemption_campaigns` 的活动 ID、规则类型、赠送月数、开始/结束时间和全局上限。
+- `redemption_campaigns` 的活动 ID、规则类型、关联口令、开始/结束时间和全局上限；每次兑换固定
+  赠送一个自然月。
 - `redemption_codes` 的稳定 `codeKey`，但不包含口令明文或普通哈希。
 - `free_access_windows` 的窗口 ID、角色 ID、开始/结束时间。
 
@@ -939,20 +947,24 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 
 ## 14. 当前实现进度
 
-截至 `2026-09-30`，登录、目录和 IAP 主链路已落地：
+截至 `2026-10-01`，登录、目录、IAP、口令兑换和角色限免主链路已落地：
 
 - `migrations/000002_create_store_domain.*.sql` 已创建 §9 的全部事实表、约束和查询索引，并在本地
   `onebeat_test` 通过 golang-migrate 实际执行。
-- `internal/store/catalog` 已写入稳定 `itemKey`、Huawei `productId`、默认免费策略和启动校验；当前
-  没有活动口令，也没有角色限免窗口。
+- `internal/store/catalog` 已写入稳定 `itemKey`、Huawei `productId`、默认免费策略和启动校验；当前配置
+  了 2026-10-01 当日口令活动和“轮滑小子”限免窗口。
 - `POST /api/v1/auth/huawei` 已实现客户端 ID Token 验证、一次性授权码交换、服务端 ID Token 验证、
   UnionID 获取和 OneBeat 会话签发；客户端不上传 UnionID。
-- `GET /api/v1/store/bootstrap` 已支持匿名与登录状态。匿名只允许火柴人和夕阳海边；登录状态返回
-  `developerPayload` 和聚合权益。
+- `GET /api/v1/store/bootstrap` 已支持匿名与登录状态。匿名也会获得当前生效的角色限免；登录状态返回
+  `developerPayload`、聚合权益、口令入口状态和月卡购买拦截状态。
+- `POST /api/v1/store/redemptions` 已实现中文口令 NFKC/HMAC 匹配、幂等、账号限次、失败限流、
+  Huawei 订阅复核、自然月赠送链、审计与稳定错误码；运营总额度使用允许少量超发的近似计数，不使用
+  活动级共享锁。
 - `POST /api/v1/iap/purchases/verify` 与 `/restore` 已实现客户端 JWS 验签、华为服务端复核、应用/
   商品/环境/账号绑定校验、purchase token 加密落库、幂等权益写入和确认发货。
-- HarmonyOS 前端已接入 Account Kit 授权登录、IAP 商品查询/购买/恢复、OneBeat 会话与统一权益缓存；
-  旧版本本地模拟购买会迁移为安全默认值，不再被当成真实购买。
+- HarmonyOS 前端已接入 Account Kit 授权登录、IAP 商品查询/购买/恢复、口令兑换、匿名限免刷新与统一
+  权益缓存；赠送月卡生效时会阻止拉起自动续费购买。旧版本本地模拟购买会迁移为安全默认值，不再被
+  当成真实购买。
 - 前端测试/生产 API 地址位于
   `entry/src/main/ets/store/StoreApiConfig.ets` 的 `STORE_API_BASE_URL_TEST` 和
   `STORE_API_BASE_URL_PROD`。两项均只接受 `https://` 地址，填写时不要带末尾 `/`。
@@ -960,9 +972,9 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 自动化验证现状：后端 `go test ./...` 通过，前端 debug HAP 构建通过。
 
 生产周期对账已通过独立 `onebeat-iap-reconciler` worker 接入，按自然日分页查询并使用独立的日常/
-历史回补 checkpoint；沙盒按 Huawei 限制不启用该查询。尚未实现且不能以本地假数据替代的闭环是
-口令兑换和活动限免。华为关键事件通知已通过 `POST /api/v1/webhooks/huawei/iap` 接入。当前没有配置
-活动口令或限免窗口，因此不影响先完成 Account Kit/IAP 沙盒购买联调。
+历史回补 checkpoint；沙盒按 Huawei 限制不启用该查询。华为关键事件通知已通过
+`POST /api/v1/webhooks/huawei/iap` 接入。口令明文仍只存在于运营侧，本地 test 摘要文件被 Git 忽略；
+生产发布前必须用生产 pepper 单独生成并挂载摘要文件。
 
 联调前还有一个硬性配置检查：`HUAWEI_IAP_PRIVATE_KEY` 必须替换为 AGC IAP 配置密钥中的 EC P-256
 私钥。若填入 API Console 的 RSA 服务账号私钥，后端会拒绝启动。

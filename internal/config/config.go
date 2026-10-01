@@ -26,6 +26,8 @@ type Config struct {
 	AccountUnionIDPepper       []byte
 	PurchaseBindingSecret      []byte
 	PurchaseTokenEncryptionKey []byte
+	RedemptionCodePepper       []byte
+	RedemptionCodesPath        string
 	JWTSigningKey              []byte
 	SessionTTL                 time.Duration
 }
@@ -48,6 +50,8 @@ func LoadStoreConfig(environment string) (Config, error) {
 		AccountUnionIDPepper:       []byte(strings.TrimSpace(os.Getenv("ACCOUNT_UNION_ID_PEPPER"))),
 		PurchaseBindingSecret:      []byte(strings.TrimSpace(os.Getenv("PURCHASE_BINDING_SECRET"))),
 		PurchaseTokenEncryptionKey: tokenKey,
+		RedemptionCodePepper:       []byte(strings.TrimSpace(os.Getenv("REDEMPTION_CODE_PEPPER"))),
+		RedemptionCodesPath:        strings.TrimSpace(os.Getenv("REDEMPTION_CODES_PATH")),
 		JWTSigningKey:              []byte(strings.TrimSpace(os.Getenv("ONEBEAT_JWT_SIGNING_KEY"))),
 		SessionTTL:                 24 * time.Hour,
 	}
@@ -57,6 +61,8 @@ func LoadStoreConfig(environment string) (Config, error) {
 		"ACCOUNT_UNION_ID_PEPPER":      string(config.AccountUnionIDPepper),
 		"PURCHASE_BINDING_SECRET":      string(config.PurchaseBindingSecret),
 		"ONEBEAT_JWT_SIGNING_KEY":      string(config.JWTSigningKey),
+		"REDEMPTION_CODE_PEPPER":       string(config.RedemptionCodePepper),
+		"REDEMPTION_CODES_PATH":        config.RedemptionCodesPath,
 		"HUAWEI_CLIENT_ID":             config.HuaweiClientID,
 		"HUAWEI_ACCOUNT_CLIENT_SECRET": config.HuaweiAccountClientSecret,
 		"HUAWEI_IAP_PRIVATE_KEY":       config.HuaweiIAPPrivateKey,
@@ -77,7 +83,8 @@ func LoadStoreConfig(environment string) (Config, error) {
 	if config.HuaweiIAPEnvironment != "sandbox" && config.HuaweiIAPEnvironment != "production" {
 		return Config{}, errors.New("HUAWEI_IAP_ENVIRONMENT must be sandbox or production")
 	}
-	if len(config.AccountUnionIDPepper) < 32 || len(config.PurchaseBindingSecret) < 32 || len(config.JWTSigningKey) < 32 {
+	if len(config.AccountUnionIDPepper) < 32 || len(config.PurchaseBindingSecret) < 32 ||
+		len(config.RedemptionCodePepper) < 32 || len(config.JWTSigningKey) < 32 {
 		return Config{}, errors.New("store HMAC and JWT secrets must contain at least 32 characters")
 	}
 
