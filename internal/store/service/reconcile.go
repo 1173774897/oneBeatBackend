@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 
-	huawei_iap "onebeat/store-api/internal/huawei/iap"
 	"onebeat/store-api/internal/store/catalog"
 	"onebeat/store-api/internal/store/security"
 )
@@ -32,17 +31,10 @@ func (s *Service) ReconcileStoredPurchases(ctx context.Context, userID string) e
 		if developerPayload == "" {
 			developerPayload = s.DeveloperPayload(userID)
 		}
-		reference := huawei_iap.PurchaseReference{
-			PurchaseOrderID: row.OrderID,
-			PurchaseToken:   token,
-			ProductID:       row.ProductID,
-		}
-		if item.IAPProductType == catalog.ProductAutoRenewable {
-			reference.ProductType = 2
-			err = s.verifySubscription(ctx, userID, item, reference, developerPayload)
+		if item.IAPProductType == catalog.ProductAutoRenewable || row.ProductType == catalog.ProductAutoRenewable {
+			err = s.reconcileSubscription(ctx, userID, item, row.OrderID, token, developerPayload)
 		} else {
-			reference.ProductType = 1
-			err = s.verifyNonConsumable(ctx, userID, item, reference, developerPayload)
+			err = s.reconcileNonConsumable(ctx, userID, item, row.OrderID, token, developerPayload)
 		}
 		if err != nil {
 			lastErr = err
