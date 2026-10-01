@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = "2026-09-30.1"
+const ConfigVersion = "2026-10-01.1"
 
 const (
 	KindPass      = "PASS"
@@ -56,6 +56,7 @@ type ItemSnapshot struct {
 type PassSnapshot struct {
 	Active       bool       `json:"active"`
 	Source       string     `json:"source,omitempty"`
+	Status       string     `json:"status,omitempty"`
 	ExpiresAt    *time.Time `json:"expiresAt"`
 	AutoRenewing bool       `json:"autoRenewing"`
 }

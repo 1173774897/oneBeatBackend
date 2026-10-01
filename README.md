@@ -53,8 +53,8 @@ POST /api/v1/iap/purchases/restore
 ```
 
 这三项依赖真实华为 Account/IAP 凭据，不能用探活 curl 伪造成功。启动前尤其要确认
-`HUAWEI_IAP_PRIVATE_KEY` 来自 API Console 服务账号 JSON 且为 RSA 私钥；完整字段映射和检查命令见
-[运行时秘密说明](deploy/secrets/README.md#华为-iap-服务账号三项字段怎么填)。
+`HUAWEI_IAP_PRIVATE_KEY` 来自 AGC「应用内支付 → 配置密钥」且为 EC P-256 私钥；完整字段映射和检查命令见
+[运行时秘密说明](deploy/secrets/README.md#harmony-iap-服务端密钥三项怎么填)。
 
 测试接口返回示例：
 
@@ -83,6 +83,10 @@ POST /api/v1/iap/purchases/restore
 | `APP_ENV` | `development` | 运行环境标识 |
 | `APP_VERSION` | `dev` | 构建版本，CI 中为提交短 SHA |
 | `DATABASE_URL` | 无 | PostgreSQL 连接 URL，必须提供 |
+| `IAP_RECONCILIATION_TIMEZONE` | `Asia/Shanghai` | 生产订单对账自然日时区 |
+| `IAP_RECONCILIATION_OBSERVE_ONLY` | `1` | 生产首次上线默认只观察交易，不改业务表 |
+| `IAP_BACKFILL_ENABLED` | `0` | 仅生产 worker 使用；`1` 时执行历史回补 |
+| `IAP_BACKFILL_DAYS` | `180` | 历史回补天数，上限 180 |
 
 收藏小铺的 Account/IAP/会话秘密见 `deploy/secrets/test.env.example` 与
 [deploy/secrets/README.md](deploy/secrets/README.md)。中国区 IAP Order/Subscription 根地址固定在代码中，

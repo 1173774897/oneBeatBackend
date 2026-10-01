@@ -1,6 +1,7 @@
 package iap
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,16 +19,16 @@ type NotificationPayload struct {
 }
 
 type NotificationMetaData struct {
-	Environment         string      `json:"environment"`
-	ApplicationID       string      `json:"applicationId"`
-	PackageName         string      `json:"packageName"`
-	Type                FlexibleInt `json:"type"`
-	CurrentProductID    string      `json:"currentProductId"`
-	SubGroupID          string      `json:"subGroupId"`
-	SubGroupGenerationID string     `json:"subGroupGenerationId"`
-	SubscriptionID      string      `json:"subscriptionId"`
-	PurchaseToken       string      `json:"purchaseToken"`
-	PurchaseOrderID     string      `json:"purchaseOrderId"`
+	Environment          string      `json:"environment"`
+	ApplicationID        string      `json:"applicationId"`
+	PackageName          string      `json:"packageName"`
+	Type                 FlexibleInt `json:"type"`
+	CurrentProductID     string      `json:"currentProductId"`
+	SubGroupID           string      `json:"subGroupId"`
+	SubGroupGenerationID string      `json:"subGroupGenerationId"`
+	SubscriptionID       string      `json:"subscriptionId"`
+	PurchaseToken        string      `json:"purchaseToken"`
+	PurchaseOrderID      string      `json:"purchaseOrderId"`
 }
 
 func ExtractJWSNotification(rawBody []byte) (string, error) {
@@ -56,6 +57,28 @@ func (c *Client) VerifyNotification(compact string) (NotificationPayload, error)
 	var payload NotificationPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return NotificationPayload{}, fmt.Errorf("decode notification payload: %w", err)
+	}
+	if strings.TrimSpace(payload.NotificationRequestID) == "" {
+		return NotificationPayload{}, errors.New("notification is missing notificationRequestId")
+	}
+	return payload, nil
+}
+
+// DecodeNotificationUnverified extracts routing metadata so the raw event can be
+// persisted before verification. Callers must not mutate business state until
+// VerifyNotification succeeds.
+func DecodeNotificationUnverified(compact string) (NotificationPayload, error) {
+	parts := strings.Split(strings.TrimSpace(compact), ".")
+	if len(parts) != 3 {
+		return NotificationPayload{}, errors.New("notification JWS must contain three segments")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return NotificationPayload{}, fmt.Errorf("decode unverified notification payload: %w", err)
+	}
+	var payload NotificationPayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return NotificationPayload{}, fmt.Errorf("parse unverified notification payload: %w", err)
 	}
 	if strings.TrimSpace(payload.NotificationRequestID) == "" {
 		return NotificationPayload{}, errors.New("notification is missing notificationRequestId")

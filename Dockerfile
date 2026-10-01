@@ -19,6 +19,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/onebeat-api \
     ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/onebeat-reconciler \
+    ./cmd/reconciler
 
 FROM alpine:3.21
 
@@ -31,6 +36,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 
 WORKDIR /app
 COPY --from=build /out/onebeat-api /app/onebeat-api
+COPY --from=build /out/onebeat-reconciler /app/onebeat-reconciler
 
 ENV APP_ENV=${APP_ENV} \
     APP_VERSION=${APP_VERSION} \

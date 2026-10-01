@@ -749,7 +749,7 @@ docker exec onebeat-postgres \
   -c "SELECT version, dirty FROM schema_migrations;"
 ```
 
-预期能看到两个数据库，并且测试库迁移版本为 `1`、`dirty` 为 `false`。随后在开发电脑检查：
+预期能看到两个数据库，并且测试库迁移版本为 `2`、`dirty` 为 `false`。随后在开发电脑检查：
 
 ```bash
 curl --fail https://api-test.example.com:8443/healthz
@@ -767,7 +767,7 @@ curl --fail https://api-test.example.com:8443/api/v1/database/test
     "database": "onebeat_test",
     "user": "onebeat_test",
     "serverTime": "2026-09-29T12:00:00Z",
-    "migrationVersion": 1,
+    "migrationVersion": 2,
     "migrationDirty": false
   }
 }
@@ -828,8 +828,8 @@ Password: <TEST_PASSWORD>
 ```text
 000001_create_store_metadata.up.sql
 000001_create_store_metadata.down.sql
-000002_create_products.up.sql
-000002_create_products.down.sql
+000002_create_store_domain.up.sql
+000002_create_store_domain.down.sql
 ```
 
 规则：
@@ -839,6 +839,47 @@ Password: <TEST_PASSWORD>
 3. 优先使用可短时间完成、可回退的 DDL；大表变更需要单独设计上线方案。
 4. Actions 只自动执行 `up`，绝不自动执行 `down` 或 `force`。
 5. 生产迁移前先备份，并先在 `onebeat_test` 执行同一组迁移。
+
+#### 本次 IAP 表重构的一次性例外
+
+项目尚未上线且旧测试数据明确不保留，因此当前分支直接重写了
+`000002_create_store_domain.*.sql`。如果服务器上的 `onebeat_test` 或 `onebeat_prod` 已执行过旧版
+`000002`，普通 `migrate up` 会看到版本仍是 `2` 并跳过，**不会**自动换成新表结构。首次部署本次
+重构时必须逐个环境重建逻辑库；完成后 `000002` 恢复为不可修改的已发布迁移。
+
+先在测试环境执行。确认没有需要保留的数据并完成备份后，在服务器停止测试 API：
+
+```bash
+cd /opt/onebeatbackend
+docker compose -f docker-compose.test.yml down
+
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d postgres \
+  -c "DROP DATABASE onebeat_test WITH (FORCE);"
+
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d postgres \
+  -c "CREATE DATABASE onebeat_test OWNER onebeat_test;"
+```
+
+随后推送 `staging`。Actions 会上传当前迁移、从版本 0 执行到版本 2，再启动测试 API。按 5.4 验证
+迁移版本、接口和沙盒购买/退款流程。测试通过后，生产环境采用同样的受控窗口：
+
+```bash
+cd /opt/onebeatbackend
+docker compose -f docker-compose.prod.yml down
+
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d postgres \
+  -c "DROP DATABASE onebeat_prod WITH (FORCE);"
+
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d postgres \
+  -c "CREATE DATABASE onebeat_prod OWNER onebeat_prod;"
+```
+
+再推送 `master` 让 Actions 迁移并启动生产 API 与对账 worker。以上命令会永久删除目标逻辑库，
+只适用于本次“未上线、无需保留旧数据”的明确前提；以后禁止用重建数据库代替正常增量迁移。
 
 手工查看测试库版本：
 
@@ -867,7 +908,68 @@ docker compose \
 
 golang-migrate 的镜像固定为 `migrate/migrate:v4.19.1`，避免 `latest` 更新造成不可预测变化。
 
-### 5.7 备份
+### 5.7 生产 IAP 对账 worker
+
+生产 Compose 会随 API 一起启动 `onebeat-iap-reconciler`。它使用相同镜像和生产数据库，但入口为
+`/app/onebeat-reconciler`，不会监听公网端口。测试/沙盒环境不启动该 worker，因为 Huawei 的
+`trade/orders/query` 不返回沙盒订单和 0 元订单。
+
+worker 的固定行为：
+
+1. 首次上线默认 `IAP_RECONCILIATION_OBSERVE_ONLY=1`，只记录脱敏交易摘要和独立观察 checkpoint，
+   不写交易、订阅或权益表。
+2. 每天按 `Asia/Shanghai` 自然日处理前一个完整自然日，单个查询窗口为 24 小时，满足 Huawei
+   “不超过 48 小时”的限制。
+3. 循环读取 `continuationToken` 直到为空；每页成功后才保存分页 checkpoint。
+4. 失败窗口 15 分钟后重试；容器停机跨过多个自然日时，从最后完成窗口继续逐日追赶。
+5. 正式任务、历史回补及各自的观察任务使用独立 checkpoint 和 PostgreSQL advisory lock，
+   多实例不会重复占有同一个任务。
+6. 只处理 Huawei 最近 180 天内可查询的数据；180 天前的漏单无法通过该接口恢复，必须依赖已经
+   保存的关键事件通知和人工审计。
+
+服务器 `/opt/onebeatbackend/.env.prod` 可配置：
+
+```dotenv
+IAP_RECONCILIATION_TIMEZONE=Asia/Shanghai
+IAP_RECONCILIATION_OBSERVE_ONLY=1
+IAP_BACKFILL_ENABLED=0
+IAP_BACKFILL_DAYS=180
+```
+
+首次部署保持观察模式，检查日志里的 `tradeType`、`productId`、`purchaseOrderId`、环境和发生时间，
+并与 Huawei 后台抽样核对；日志不会输出 purchase token。确认真实响应结构和分页均正确后，把
+`IAP_RECONCILIATION_OBSERVE_ONLY` 改为 `0`。观察任务与正式任务使用不同 job name，正式任务不会误把
+“已观察”当成“已落库”。
+
+切换正式模式时，若要补齐观察期间或更早的生产订单，先备份数据库，再同时把
+`IAP_BACKFILL_ENABLED` 临时改为 `1` 并重建 worker：
+
+```bash
+cd /opt/onebeatbackend
+
+docker compose \
+  -f docker-compose.prod.yml \
+  up -d --force-recreate iap-reconciler
+
+docker logs -f --tail 200 onebeat-iap-reconciler
+```
+
+历史回补按“从近到远”执行，完成后 checkpoint 会阻止同一历史窗口重复产生业务记录。随后保持
+`IAP_RECONCILIATION_OBSERVE_ONLY=0`，把 `IAP_BACKFILL_ENABLED` 改回 `0` 并再次重建 worker。不要在
+沙盒上用此任务验收；沙盒应验证关键事件通知、`QuerySubscription` 和恢复购买链路。
+
+检查进度：
+
+```bash
+docker exec onebeat-postgres \
+  psql -U onebeat_admin -d onebeat_prod \
+  -c "SELECT job_name, direction, window_start, window_end, page_number, status, last_success_at, last_error FROM iap_reconciliation_checkpoints ORDER BY job_name;"
+```
+
+`status=FAILED` 时先看 worker 日志和 `last_error`。不要手工改 continuation token；修复网络或凭据后，
+worker 会从已保存页继续。若确认 Huawei 已使 token 永久失效，才在备份后由开发人员执行受控 reset。
+
+### 5.8 备份
 
 单容器意味着生产和测试共享同一个持久卷，但备份应按逻辑库分别执行。在服务器上创建只有
 `onebeat` 可访问的备份目录：

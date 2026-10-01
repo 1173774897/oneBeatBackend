@@ -43,7 +43,8 @@ func (s *Service) reconcileNonConsumable(
 	}
 	purchasedAt := order.PurchaseTime.Time()
 	result, err := s.repository.ApplyNonConsumable(ctx, repository.OrderRecord{
-		UserID: userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
+		Environment: providerEnvironment(order.Environment),
+		UserID:      userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
 		ProductType: catalog.ProductNonConsumable, OrderID: persistOrderID,
 		OriginalOrderID:   optionalString(order.OriginalPurchaseOrderID),
 		PurchaseTokenHash: security.SHA256(token), PurchaseTokenCiphertext: encryptedToken,
@@ -52,9 +53,6 @@ func (s *Service) reconcileNonConsumable(
 	}, now)
 	if err != nil {
 		return err
-	}
-	if persistOrderID != storedOrderID && storedOrderID != "" {
-		_ = s.repository.MarkHuaweiOrderStatus(ctx, userID, storedOrderID, status, now)
 	}
 	if result.NeedsConfirm && status == "PURCHASED" {
 		if err := s.iap.ConfirmOrder(ctx, persistOrderID, token); err != nil {

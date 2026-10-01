@@ -1,6 +1,23 @@
 package iap
 
-import "testing"
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+)
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestValidateOrderIgnoresDeveloperPayloadMismatchInSandbox(t *testing.T) {
 	client := &Client{
@@ -50,5 +67,38 @@ func TestValidateSubscriptionUsesTopLevelEnvironmentAndStateToken(t *testing.T) 
 	}
 	if err := client.ValidateSubscription(subscription, "monthly", "binding"); err != nil {
 		t.Fatalf("validate subscription: %v", err)
+	}
+}
+
+func TestQuerySubscriptionSendsSubscriptionIDInsteadOfOrderID(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]string
+	client := &Client{
+		httpClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"responseCode":"1","responseMessage":"fixture"}`)),
+				Header:     make(http.Header),
+			}, nil
+		})},
+		signingKey: key,
+		keyID:      "key-id", issuerID: "issuer-id", applicationID: "app-id",
+		now: func() time.Time { return time.Unix(1_700_000_000, 0) },
+	}
+	_, _ = client.QuerySubscription(context.Background(), "onebeat.pass.monthly", "token-1")
+	if body["subscriptionId"] != "onebeat.pass.monthly" {
+		t.Fatalf("subscriptionId = %q", body["subscriptionId"])
+	}
+	if body["purchaseToken"] != "token-1" {
+		t.Fatalf("purchaseToken = %q", body["purchaseToken"])
+	}
+	if _, exists := body["purchaseOrderId"]; exists {
+		t.Fatal("QuerySubscription must not send purchaseOrderId")
 	}
 }

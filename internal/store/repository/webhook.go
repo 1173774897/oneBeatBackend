@@ -11,7 +11,7 @@ import (
 )
 
 type WebhookAcquireResult struct {
-	EventDatabaseID string
+	EventDatabaseID  string
 	AlreadyProcessed bool
 }
 
@@ -21,13 +21,15 @@ type OrderLookup struct {
 	ProductID        string
 	ProductType      string
 	DeveloperPayload string
+	SubscriptionID   *string
 }
 
 func (r *Repository) AcquireWebhookEvent(
 	ctx context.Context,
 	huaweiEventID string,
 	environment string,
-	eventType string,
+	notificationType string,
+	notificationSubtype string,
 	signatureValid bool,
 	payload json.RawMessage,
 ) (WebhookAcquireResult, error) {
@@ -42,16 +44,18 @@ func (r *Repository) AcquireWebhookEvent(
 	err = tx.QueryRow(ctx, `
 		SELECT id::text, status
 		FROM iap_webhook_events
-		WHERE huawei_event_id = $1
+		WHERE provider = 'HUAWEI' AND environment = $1 AND huawei_event_id = $2
 		FOR UPDATE
-	`, huaweiEventID).Scan(&eventID, &status)
+	`, environment, huaweiEventID).Scan(&eventID, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(ctx, `
 			INSERT INTO iap_webhook_events
-				(huawei_event_id, environment, event_type, signature_valid, payload, status)
-			VALUES ($1, $2, $3, $4, $5, 'PROCESSING')
+				(provider, environment, huawei_event_id, notification_type,
+				 notification_subtype, signature_valid, payload, status)
+			VALUES ('HUAWEI', $1, $2, $3, $4, $5, $6, 'PROCESSING')
 			RETURNING id::text
-		`, huaweiEventID, environment, eventType, signatureValid, payload).Scan(&eventID)
+		`, environment, huaweiEventID, notificationType, notificationSubtype,
+			signatureValid, payload).Scan(&eventID)
 		if err != nil {
 			return WebhookAcquireResult{}, fmt.Errorf("insert webhook event: %w", err)
 		}
@@ -71,9 +75,7 @@ func (r *Repository) AcquireWebhookEvent(
 	}
 	_, err = tx.Exec(ctx, `
 		UPDATE iap_webhook_events
-		SET status = 'PROCESSING',
-		    attempt_count = attempt_count + 1,
-		    last_error = NULL
+		SET status = 'PROCESSING', attempt_count = attempt_count + 1, last_error = NULL
 		WHERE id = $1
 	`, eventID)
 	if err != nil {
@@ -105,20 +107,67 @@ func (r *Repository) FinishWebhookEvent(
 	return err
 }
 
-func (r *Repository) FindOrderByHuaweiOrderID(ctx context.Context, huaweiOrderID string) (OrderLookup, error) {
+func (r *Repository) MarkWebhookSignatureValid(ctx context.Context, eventDatabaseID string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE iap_webhook_events SET signature_valid = true
+		WHERE id = $1
+	`, eventDatabaseID)
+	return err
+}
+
+func (r *Repository) FindPurchaseOwner(
+	ctx context.Context,
+	environment string,
+	purchaseOrderID string,
+	purchaseTokenHash []byte,
+	developerPayload string,
+) (OrderLookup, error) {
 	var lookup OrderLookup
 	err := r.pool.QueryRow(ctx, `
-		SELECT user_id::text, item_key, huawei_product_id, product_type, developer_payload
-		FROM iap_orders
-		WHERE huawei_order_id = $1
-	`, huaweiOrderID).Scan(
-		&lookup.UserID, &lookup.ItemKey, &lookup.ProductID, &lookup.ProductType, &lookup.DeveloperPayload,
+		SELECT user_id::text, item_key, huawei_product_id, product_type,
+		       developer_payload, subscription_id::text
+		FROM iap_provider_transactions
+		WHERE provider = 'HUAWEI' AND environment = $1
+		  AND (
+			purchase_order_id = $2
+			OR purchase_token_hash = $3
+			OR (NULLIF($4, '') IS NOT NULL AND developer_payload = $4)
+		  )
+		ORDER BY
+		  CASE WHEN purchase_order_id = $2 THEN 0 WHEN purchase_token_hash = $3 THEN 1 ELSE 2 END,
+		  verified_at DESC
+		LIMIT 1
+	`, environment, purchaseOrderID, purchaseTokenHash, developerPayload).Scan(
+		&lookup.UserID, &lookup.ItemKey, &lookup.ProductID, &lookup.ProductType,
+		&lookup.DeveloperPayload, &lookup.SubscriptionID,
 	)
+	if errors.Is(err, pgx.ErrNoRows) && developerPayload != "" {
+		err = r.pool.QueryRow(ctx, `
+			SELECT user_id::text, item_key, huawei_product_id, 'AUTORENEWABLE',
+			       developer_payload, id::text
+			FROM iap_subscriptions
+			WHERE provider = 'HUAWEI' AND environment = $1 AND developer_payload = $2
+			ORDER BY verified_at DESC
+			LIMIT 1
+		`, environment, developerPayload).Scan(
+			&lookup.UserID, &lookup.ItemKey, &lookup.ProductID, &lookup.ProductType,
+			&lookup.DeveloperPayload, &lookup.SubscriptionID,
+		)
+	}
+	if errors.Is(err, pgx.ErrNoRows) && developerPayload != "" {
+		err = r.pool.QueryRow(ctx, `
+			SELECT id::text FROM users
+			WHERE developer_payload = $1 AND status = 'ACTIVE'
+		`, developerPayload).Scan(&lookup.UserID)
+		if err == nil {
+			lookup.DeveloperPayload = developerPayload
+		}
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return OrderLookup{}, errors.New("order not found")
+		return OrderLookup{}, errors.New("purchase owner not found")
 	}
 	if err != nil {
-		return OrderLookup{}, fmt.Errorf("lookup order: %w", err)
+		return OrderLookup{}, fmt.Errorf("lookup purchase owner: %w", err)
 	}
 	return lookup, nil
 }

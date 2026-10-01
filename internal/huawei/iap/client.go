@@ -28,10 +28,11 @@ const (
 	// The China site is fixed in code so production never guesses a data-processing site.
 	ChinaOrderRootURL        = "https://orders-drcn.iap.cloud.huawei.com.cn"
 	ChinaSubscriptionRootURL = "https://subscr-drcn.iap.cloud.huawei.com.cn"
-	iapRequestJWTAudience = "iap-v1"
+	iapRequestJWTAudience    = "iap-v1"
 
 	orderConfirmPath        = "/order/harmony/v1/application/purchase/shipped/confirm"
 	orderStatusPath         = "/order/harmony/v1/application/order/status/query"
+	tradeOrdersQueryPath    = "/order/harmony/v1/application/trade/orders/query"
 	subscriptionConfirmPath = "/subscription/harmony/v1/application/purchase/shipped/confirm"
 	subscriptionStatusPath  = "/subscription/harmony/v1/application/subscription/status/query"
 	maximumResponseBody     = 2 << 20
@@ -117,6 +118,8 @@ type PurchaseOrderPayload struct {
 	RevocationTime                    Millis          `json:"revocationTime"`
 	Environment                       string          `json:"environment"`
 	SubGroupID                        string          `json:"subGroupId"`
+	Price                             json.Number     `json:"price"`
+	Currency                          string          `json:"currency"`
 }
 
 func (p PurchaseOrderPayload) Revoked() bool {
@@ -242,13 +245,16 @@ func (c *Client) QueryOrder(ctx context.Context, orderID string, purchaseToken s
 	return order, nil
 }
 
-func (c *Client) QuerySubscription(ctx context.Context, orderID string, purchaseToken string) (SubGroupStatusPayload, error) {
+func (c *Client) QuerySubscription(ctx context.Context, subscriptionID string, purchaseToken string) (SubGroupStatusPayload, error) {
 	var response struct {
 		ResponseCode      string `json:"responseCode"`
 		ResponseMessage   string `json:"responseMessage"`
 		JWSSubGroupStatus string `json:"jwsSubGroupStatus"`
 	}
-	if err := c.call(ctx, subscriptionStatusPath, orderID, purchaseToken, &response); err != nil {
+	if err := c.callJSON(ctx, subscriptionStatusPath, map[string]string{
+		"subscriptionId": subscriptionID,
+		"purchaseToken":  purchaseToken,
+	}, &response); err != nil {
 		return SubGroupStatusPayload{}, err
 	}
 	if response.ResponseCode != "0" || response.JWSSubGroupStatus == "" {
@@ -361,7 +367,14 @@ func (c *Client) confirm(ctx context.Context, path string, orderID string, purch
 }
 
 func (c *Client) call(ctx context.Context, path string, orderID string, purchaseToken string, target interface{}) error {
-	body, err := json.Marshal(map[string]string{"purchaseOrderId": orderID, "purchaseToken": purchaseToken})
+	return c.callJSON(ctx, path, map[string]string{
+		"purchaseOrderId": orderID,
+		"purchaseToken":   purchaseToken,
+	}, target)
+}
+
+func (c *Client) callJSON(ctx context.Context, path string, requestBody interface{}, target interface{}) error {
+	body, err := json.Marshal(requestBody)
 	if err != nil {
 		return err
 	}

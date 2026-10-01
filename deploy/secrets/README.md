@@ -142,9 +142,10 @@ Actions 只部署镜像与迁移，**不会**复制 `secrets/`；改秘密后只
 | 与 API 环境 | `APP_ENV=test` + `HUAWEI_IAP_ENVIRONMENT=sandbox`，勿指向生产库 |
 
 联调前核对：URL 公网 HTTPS 可达、事件类型包含退款/撤销/订阅状态变更（以 AGC 当前勾选项为准）、
-沙盒与 staging secrets 一致。服务端验签 JWS → `notificationRequestId` 幂等写入 `iap_webhook_events`
-→ 查华为订单/订阅 → 更新 `iap_orders` 与 `entitlement_grants`。若订单尚未在 OneBeat 落库，会记
-`order not linked` 并返回 HTTP 200；用户可在客户端点 **恢复购买** 补链后再收后续通知。
+沙盒与 staging secrets 一致。服务端先保存脱敏通知，再验签 JWS；以 `notificationRequestId` 幂等写入
+`iap_webhook_events`，复核 Huawei 订单/订阅后更新 Provider 交易、订阅周期和权益。若通知暂时无法
+关联 OneBeat 用户，事件保持 `FAILED` 并返回可重试错误；用户恢复购买完成账号绑定后，Huawei 重试或
+后续人工重放即可继续处理，不能把未归因通知静默标成成功。
 
 ## Docker Compose
 

@@ -1,9 +1,14 @@
 DROP TABLE IF EXISTS entitlement_audit_logs;
+DROP TABLE IF EXISTS iap_reconciliation_checkpoints;
 DROP TABLE IF EXISTS iap_webhook_events;
 DROP TABLE IF EXISTS redemption_account_usage;
 DROP TABLE IF EXISTS redemption_campaign_usage;
 DROP TABLE IF EXISTS redemptions;
 DROP TABLE IF EXISTS entitlement_grants;
+DROP TABLE IF EXISTS iap_refund_requests;
+ALTER TABLE IF EXISTS iap_subscriptions DROP CONSTRAINT IF EXISTS iap_subscriptions_latest_period_fk;
+DROP TABLE IF EXISTS iap_subscription_periods;
+DROP TABLE IF EXISTS iap_provider_transactions;
+DROP TABLE IF EXISTS iap_subscription_tokens;
 DROP TABLE IF EXISTS iap_subscriptions;
-DROP TABLE IF EXISTS iap_orders;
 DROP TABLE IF EXISTS users;

@@ -64,7 +64,12 @@ func (s *Service) DeveloperPayload(userID string) string {
 }
 
 func (s *Service) Bootstrap(ctx context.Context, userID string) (catalog.Bootstrap, error) {
-	return s.repository.Bootstrap(ctx, userID, s.DeveloperPayload(userID), s.now().UTC())
+	now := s.now().UTC()
+	developerPayload := s.DeveloperPayload(userID)
+	if err := s.repository.BindDeveloperPayload(ctx, userID, developerPayload, now); err != nil {
+		return catalog.Bootstrap{}, err
+	}
+	return s.repository.Bootstrap(ctx, userID, developerPayload, now)
 }
 
 func (s *Service) VerifyPurchase(ctx context.Context, userID string, input VerifyInput) (catalog.Bootstrap, error) {
@@ -152,7 +157,8 @@ func (s *Service) verifyNonConsumable(
 	}
 	purchasedAt := order.PurchaseTime.Time()
 	result, err := s.repository.ApplyNonConsumable(ctx, repository.OrderRecord{
-		UserID: userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
+		Environment: providerEnvironment(order.Environment),
+		UserID:      userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
 		ProductType: catalog.ProductNonConsumable, OrderID: order.PurchaseOrderID,
 		OriginalOrderID:   optionalString(order.OriginalPurchaseOrderID),
 		PurchaseTokenHash: security.SHA256(order.PurchaseToken), PurchaseTokenCiphertext: encryptedToken,
@@ -180,7 +186,18 @@ func (s *Service) verifySubscription(
 	reference huawei_iap.PurchaseReference,
 	developerPayload string,
 ) error {
-	subscription, err := s.iap.QuerySubscription(ctx, reference.PurchaseOrderID, reference.PurchaseToken)
+	return s.verifySubscriptionFromSource(ctx, userID, item, reference, developerPayload, "CLIENT_RESTORE")
+}
+
+func (s *Service) verifySubscriptionFromSource(
+	ctx context.Context,
+	userID string,
+	item catalog.Item,
+	reference huawei_iap.PurchaseReference,
+	developerPayload string,
+	source string,
+) error {
+	subscription, err := s.iap.QuerySubscription(ctx, item.HuaweiProductID, reference.PurchaseToken)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHuaweiUnavailable, err)
 	}
@@ -189,15 +206,9 @@ func (s *Service) verifySubscription(
 	}
 	state := subscription.LastSubscriptionStatus
 	order := state.LastPurchaseOrder
-	if order.PurchaseOrderID != reference.PurchaseOrderID {
-		return fmt.Errorf("%w: authoritative subscription order mismatch", ErrInvalidPurchase)
-	}
 	purchaseToken := state.PurchaseToken
 	if purchaseToken == "" {
 		purchaseToken = order.PurchaseToken
-	}
-	if purchaseToken != reference.PurchaseToken {
-		return fmt.Errorf("%w: authoritative subscription token mismatch", ErrInvalidPurchase)
 	}
 	encryptedToken, err := security.EncryptToken(s.tokenEncryptionKey, purchaseToken)
 	if err != nil {
@@ -216,18 +227,21 @@ func (s *Service) verifySubscription(
 		orderStatus = "REVOKED"
 	}
 	orderResult, err := s.repository.ApplySubscription(ctx, repository.OrderRecord{
-		UserID: userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
+		Environment: providerEnvironment(subscription.Environment),
+		UserID:      userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
 		ProductType: catalog.ProductAutoRenewable, OrderID: order.PurchaseOrderID,
 		OriginalOrderID:   optionalString(order.OriginalPurchaseOrderID),
 		PurchaseTokenHash: security.SHA256(purchaseToken), PurchaseTokenCiphertext: encryptedToken,
 		DeveloperPayload: developerPayload, Status: orderStatus, PurchasedAt: &startsAt,
 		ExpiresAt: &expiresAt, Finished: finished, Receipt: subscription,
 	}, repository.SubscriptionRecord{
-		UserID: userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
+		Environment: providerEnvironment(subscription.Environment),
+		UserID:      userID, ItemKey: item.ItemKey, ProductID: item.HuaweiProductID,
 		SubscriptionKey:   subscriptionKey(order, purchaseToken),
 		PurchaseTokenHash: security.SHA256(purchaseToken), PurchaseTokenCiphertext: encryptedToken,
 		Status: status, AutoRenewing: int(state.RenewalInfo.AutoRenewStatusCode) == 1,
-		StartsAt: startsAt, ExpiresAt: expiresAt, VerifiedAt: now,
+		StartsAt: startsAt, ExpiresAt: expiresAt,
+		RevokedAt: revokedAt(status, order, now), VerifiedAt: now, Source: source,
 	}, now)
 	if err != nil {
 		return err
@@ -243,6 +257,24 @@ func (s *Service) verifySubscription(
 	return nil
 }
 
+func revokedAt(status string, order huawei_iap.PurchaseOrderPayload, now time.Time) *time.Time {
+	if status != "REVOKED" {
+		return nil
+	}
+	value := order.RevocationTime.Time()
+	if value.IsZero() {
+		value = now
+	}
+	return &value
+}
+
+func providerEnvironment(value string) string {
+	if value == "SANDBOX" {
+		return "SANDBOX"
+	}
+	return "PRODUCTION"
+}
+
 func subscriptionStatus(status int, autoRenewStatus int) string {
 	switch status {
 	case 1:
@@ -253,7 +285,7 @@ func subscriptionStatus(status int, autoRenewStatus int) string {
 	case 2:
 		return "EXPIRED"
 	case 3:
-		return "GRACE"
+		return "EXPIRED"
 	case 5:
 		return "REVOKED"
 	default:

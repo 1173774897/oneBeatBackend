@@ -251,7 +251,7 @@ developerPayload = HMAC-SHA256(PURCHASE_BINDING_SECRET, oneBeatUserId)
 - 用户关闭自动续费后，当期结束前仍然有效。
 - 续费成功后更新订阅和月卡权益到期时间。
 - 当前业务规则仅在 `lastSubscriptionStatus.status == 1` 且 `expiresTime > now` 时授予月卡权益。
-  状态 `3`（尝试扣费/宽限）会被记录为 `GRACE`，但第一版不解锁收费内容。
+  状态 `3`（尝试扣费）不建立本地独立状态，统一按无权益的 `EXPIRED` 处理；原始响应仅保留为审计快照。
 - 过期、退款或撤销后关闭对应月卡权益。
 - 关键事件通知丢失时，通过客户端恢复购买和定时对账补偿。
 
@@ -548,7 +548,7 @@ token 应以华为实际协议为准。订单唯一性以 `huawei_order_id` 为�
 | `latest_order_id` | `uuid` | 外键到最新 `iap_orders` |
 | `purchase_token_hash` | `bytea` | 查询索引 |
 | `purchase_token_ciphertext` | `bytea` | 加密保存 |
-| `status` | `text` | `ACTIVE`、`CANCELED_ACTIVE`、`GRACE`、`EXPIRED`、`REFUNDED`、`REVOKED` |
+| `status` | `text` | `ACTIVE`、`CANCELED_ACTIVE`、`EXPIRED`、`REVOKED`；新结构详见调整文档 |
 | `auto_renewing` | `boolean` | 是否继续自动续费，不单独决定当前权益 |
 | `starts_at` | `timestamptz` | 当前关系开始时间 |
 | `expires_at` | `timestamptz` | 当前已确认权益到期时间 |
@@ -679,16 +679,16 @@ HUAWEI_IAP_KEY_ID
 HUAWEI_IAP_ISSUER_ID
 ```
 
-后三项必须来自华为开发者联盟 **API Console 服务账号 JSON** 的 `private_key`、`key_id` 和
-`sub_account`。服务账号 JWT 使用 `PS256`（RSA-PSS + SHA-256），因此 `private_key` 必须是 RSA
-私钥；AGC 调试签名、IAP 通知验签或其他用途生成的 EC P-256 私钥不能替代它。服务启动时会解析私钥并
-在密钥类型不正确时直接失败，避免带着错误鉴权配置上线。
+后三项必须来自 **AppGallery Connect → 应用 → 应用内支付 → 配置密钥** 的同一套密钥。
+Harmony IAP REST 请求 JWT 使用 `ES256`、`aud=iap-v1` 并携带请求体 `digest`，因此私钥必须是
+EC P-256；API Console 的 RSA 服务账号私钥不能替代它。服务启动时会解析私钥并在密钥类型不正确时
+直接失败，避免带着错误鉴权配置上线。
 
 中国区 IAP 服务地址按华为官方“公共说明”的站点表固定在代码中，不通过环境变量猜测：
 
 ```text
-Order:        https://orders-drcn.iap.hicloud.com
-Subscription: https://subscr-drcn.iap.hicloud.com
+Order:        https://orders-drcn.iap.cloud.huawei.com.cn
+Subscription: https://subscr-drcn.iap.cloud.huawei.com.cn
 ```
 
 当前 HarmonyOS 接口路径分别使用 `/order/harmony/v1/...` 和 `/subscription/harmony/v1/...`。
@@ -860,9 +860,9 @@ HTTPS）见 [deployment.md](deployment.md)。目录、事实表、登录、会�
 | `REDEMPTION_CODE_PEPPER` | `openssl rand -hex 32` | 是 |
 | `ONEBEAT_JWT_SIGNING_KEY` | 足够长的随机或 RSA 私钥 | 是 |
 | `HUAWEI_ACCOUNT_CLIENT_SECRET` | 华为控制台 | 是 |
-| `HUAWEI_IAP_PRIVATE_KEY` | API Console 服务账号 JSON 的 RSA `private_key` | 是 |
-| `HUAWEI_IAP_KEY_ID` | 同一服务账号 JSON 的 `key_id` | 是 |
-| `HUAWEI_IAP_ISSUER_ID` | 同一服务账号 JSON 的 `sub_account` | 是 |
+| `HUAWEI_IAP_PRIVATE_KEY` | AGC IAP 配置密钥的 EC P-256 私钥 | 是 |
+| `HUAWEI_IAP_KEY_ID` | 同一套 IAP 配置密钥的 `key_id` | 是 |
+| `HUAWEI_IAP_ISSUER_ID` | 同一套 IAP 配置密钥的 issuer ID | 是 |
 
 挂载路径：`/opt/onebeatbackend/secrets/test/`、 `.../prod/`。仓库内布局与说明见
 [deploy/secrets/README.md](../deploy/secrets/README.md)：单行秘密在 `test.env` / `prod.env`，
@@ -913,7 +913,7 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 
 - Account Kit + UnionID 开通，Client ID/Secret 已给后端 test 环境。
 - IAP 沙盒商品可查询价格，沙盒账号可下单。
-- API Console 服务账号的 RSA `private_key`、`key_id`、`sub_account` 已配置在 test secrets。
+- AGC IAP 配置密钥的 EC P-256 私钥、`key_id`、issuer ID 已配置在 test secrets。
 - 测试域名 `:8443` 可访问，webhook 已指向 staging（或隧道）。
 
 **可以上生产商品**
@@ -928,7 +928,7 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 [ ] Account Kit + UnionID 已开通
 [ ] Client ID → 公共配置；Client Secret → secrets/test
 [ ] IAP Kit 已开通；§3.1 八个 productId（沙盒）已创建
-[ ] API Console 服务账号 RSA private_key/key_id/sub_account → secrets/test
+[ ] AGC IAP 配置密钥 EC P-256 private_key/key_id/issuer ID → secrets/test
 [ ] Webhook → 测试 API 公网 URL
 [ ] 沙盒测试华为账号已添加
 [ ] test 环境 §10.2 全部秘密已生成并挂载
@@ -959,9 +959,10 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 
 自动化验证现状：后端 `go test ./...` 通过，前端 debug HAP 构建通过。
 
-尚未实现且不能以本地假数据替代的闭环：周期对账、口令兑换和活动限免。华为关键事件通知已通过
-`POST /api/v1/webhooks/huawei/iap` 接入。当前
-没有配置活动口令或限免窗口，因此不影响先完成 Account Kit/IAP 沙盒购买联调。
+生产周期对账已通过独立 `onebeat-iap-reconciler` worker 接入，按自然日分页查询并使用独立的日常/
+历史回补 checkpoint；沙盒按 Huawei 限制不启用该查询。尚未实现且不能以本地假数据替代的闭环是
+口令兑换和活动限免。华为关键事件通知已通过 `POST /api/v1/webhooks/huawei/iap` 接入。当前没有配置
+活动口令或限免窗口，因此不影响先完成 Account Kit/IAP 沙盒购买联调。
 
-联调前还有一个硬性配置检查：`HUAWEI_IAP_PRIVATE_KEY` 必须替换为 API Console 服务账号 JSON 中的
-RSA 私钥。若填入 EC P-256 私钥，后端会报 `HUAWEI_IAP_PRIVATE_KEY is not an RSA key` 并拒绝启动。
+联调前还有一个硬性配置检查：`HUAWEI_IAP_PRIVATE_KEY` 必须替换为 AGC IAP 配置密钥中的 EC P-256
+私钥。若填入 API Console 的 RSA 服务账号私钥，后端会拒绝启动。

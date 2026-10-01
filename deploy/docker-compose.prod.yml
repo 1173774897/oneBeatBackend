@@ -68,6 +68,31 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  iap-reconciler:
+    image: "${ONEBEAT_IMAGE:-ghcr.io/1173774897/onebeatbackend:prod}"
+    container_name: onebeat-iap-reconciler
+    restart: unless-stopped
+    init: true
+    entrypoint: ["/app/onebeat-reconciler"]
+    env_file:
+      - path: ./.env.prod
+        required: true
+      - path: ./secrets/prod.env
+        required: false
+    environment:
+      APP_ENV: "prod"
+    networks:
+      - onebeat-backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 50
+    stop_grace_period: 30s
+
 networks:
   onebeat-backend:
     external: true
