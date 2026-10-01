@@ -136,6 +136,17 @@ func (s *Service) verifyNonConsumable(
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHuaweiUnavailable, err)
 	}
+	return s.verifyAndApplyNonConsumable(ctx, userID, item, reference, developerPayload, order)
+}
+
+func (s *Service) verifyAndApplyNonConsumable(
+	ctx context.Context,
+	userID string,
+	item catalog.Item,
+	reference huawei_iap.PurchaseReference,
+	developerPayload string,
+	order huawei_iap.PurchaseOrderPayload,
+) error {
 	expectedProductType := reference.ProductType
 	if expectedProductType <= 0 {
 		expectedProductType = 1

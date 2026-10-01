@@ -109,10 +109,23 @@ func (s *Service) validateNotificationApplication(payload huawei_iap.Notificatio
 	if strings.TrimSpace(meta.PurchaseToken) == "" {
 		return errors.New("notification metadata is missing purchaseToken")
 	}
-	if strings.TrimSpace(meta.CurrentProductID) == "" && strings.TrimSpace(meta.SubscriptionID) == "" {
+	if strings.TrimSpace(meta.PurchaseOrderID) == "" {
+		return errors.New("notification metadata is missing purchaseOrderId")
+	}
+	// One-time product notifications do not necessarily carry a product ID. In
+	// that case the signed order-query response is the authoritative source.
+	if int(meta.Type) == 2 && notificationProductID(meta) == "" {
 		return errors.New("notification metadata is missing product identity")
 	}
 	return nil
+}
+
+func notificationProductID(meta huawei_iap.NotificationMetaData) string {
+	productID := strings.TrimSpace(meta.CurrentProductID)
+	if productID == "" {
+		productID = strings.TrimSpace(meta.SubscriptionID)
+	}
+	return productID
 }
 
 func (s *Service) processNotification(
@@ -121,16 +134,13 @@ func (s *Service) processNotification(
 	payload huawei_iap.NotificationPayload,
 ) error {
 	meta := payload.NotificationMetaData
-	productID := strings.TrimSpace(meta.CurrentProductID)
-	if productID == "" {
-		productID = strings.TrimSpace(meta.SubscriptionID)
-	}
+	productID := notificationProductID(meta)
 	item, itemKnown := catalog.FindByProductID(productID)
 	isSubscription := int(meta.Type) == 2 || (itemKnown && item.IAPProductType == catalog.ProductAutoRenewable)
 	if isSubscription {
 		return s.processSubscriptionNotification(ctx, environment, payload, productID, item, itemKnown)
 	}
-	return s.processOrderNotification(ctx, environment, payload, productID, item, itemKnown)
+	return s.processOrderNotification(ctx, environment, payload, productID)
 }
 
 func (s *Service) processSubscriptionNotification(
@@ -187,17 +197,16 @@ func (s *Service) processOrderNotification(
 	ctx context.Context,
 	environment string,
 	payload huawei_iap.NotificationPayload,
-	productID string,
-	item catalog.Item,
-	itemKnown bool,
+	notificationProductID string,
 ) error {
-	if !itemKnown {
-		return fmt.Errorf("%w: unknown product %s", ErrInvalidPurchase, productID)
-	}
 	meta := payload.NotificationMetaData
 	order, err := s.iap.QueryOrder(ctx, meta.PurchaseOrderID, meta.PurchaseToken)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrHuaweiUnavailable, err)
+	}
+	item, err := oneTimeItemFromOrder(notificationProductID, order)
+	if err != nil {
+		return err
 	}
 	lookup, err := s.repository.FindPurchaseOwner(
 		ctx,
@@ -209,12 +218,12 @@ func (s *Service) processOrderNotification(
 	if err != nil {
 		return ErrWebhookUnknownOrder
 	}
-	if err := s.verifyNonConsumable(ctx, lookup.UserID, item, huawei_iap.PurchaseReference{
+	if err := s.verifyAndApplyNonConsumable(ctx, lookup.UserID, item, huawei_iap.PurchaseReference{
 		PurchaseOrderID: meta.PurchaseOrderID,
 		PurchaseToken:   meta.PurchaseToken,
 		ProductID:       item.HuaweiProductID,
 		ProductType:     1,
-	}, s.DeveloperPayload(lookup.UserID)); err != nil {
+	}, s.DeveloperPayload(lookup.UserID), order); err != nil {
 		return err
 	}
 	if isRefundNotification(payload.NotificationType, payload.NotificationSubtype) {
@@ -223,6 +232,21 @@ func (s *Service) processOrderNotification(
 		}
 	}
 	return s.recordWebhookAudit(ctx, lookup, item, payload)
+}
+
+func oneTimeItemFromOrder(notificationProductID string, order huawei_iap.PurchaseOrderPayload) (catalog.Item, error) {
+	productID := strings.TrimSpace(order.ProductID)
+	if productID == "" {
+		return catalog.Item{}, fmt.Errorf("%w: authoritative order is missing product identity", ErrInvalidPurchase)
+	}
+	if notificationProductID != "" && notificationProductID != productID {
+		return catalog.Item{}, fmt.Errorf("%w: notification product does not match authoritative order", ErrInvalidPurchase)
+	}
+	item, ok := catalog.FindByProductID(productID)
+	if !ok || item.IAPProductType != catalog.ProductNonConsumable || int(order.ProductType) != 1 {
+		return catalog.Item{}, fmt.Errorf("%w: unknown one-time product %s", ErrInvalidPurchase, productID)
+	}
+	return item, nil
 }
 
 func (s *Service) persistOrderWebhookRefund(
