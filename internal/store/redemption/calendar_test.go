@@ -19,3 +19,32 @@ func TestCalendarBoundaryKeepsAnchorDayAcrossShortMonths(t *testing.T) {
 		}
 	}
 }
+
+func TestMonthDurationForEnvironmentAcceleratesOnlyNonProduction(t *testing.T) {
+	for _, environment := range []string{"prod", "production", " PROD "} {
+		if got := MonthDurationForEnvironment(environment); got != 0 {
+			t.Fatalf("MonthDurationForEnvironment(%q) = %s, want calendar month", environment, got)
+		}
+	}
+	for _, environment := range []string{"test", "development", "staging", ""} {
+		if got := MonthDurationForEnvironment(environment); got != 300*time.Second {
+			t.Fatalf("MonthDurationForEnvironment(%q) = %s, want 300s", environment, got)
+		}
+	}
+}
+
+func TestGrantBoundaryUsesFiveMinuteMonthsWhenAccelerated(t *testing.T) {
+	anchor := time.Date(2027, time.January, 31, 2, 3, 4, 5, time.UTC)
+	for months, want := range []time.Time{
+		anchor,
+		anchor.Add(300 * time.Second),
+		anchor.Add(600 * time.Second),
+	} {
+		if got := GrantBoundary(anchor, months, NonProductionMonthDuration); !got.Equal(want) {
+			t.Fatalf("GrantBoundary(%d) = %s, want %s", months, got, want)
+		}
+	}
+	if got, want := GrantBoundary(anchor, 1, 0), CalendarBoundary(anchor, 1); !got.Equal(want) {
+		t.Fatalf("production GrantBoundary = %s, want %s", got, want)
+	}
+}

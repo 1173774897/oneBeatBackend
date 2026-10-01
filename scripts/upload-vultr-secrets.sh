@@ -93,12 +93,13 @@ fi
 
 ssh $SSH_OPTS "$SSH_TARGET" <<EOF
 set -eu
-chmod 700 '$REMOTE_SECRETS/test' '$REMOTE_SECRETS/prod'
 chmod 600 '$REMOTE_SECRETS/test.env' '$REMOTE_SECRETS/prod.env'
+# API 容器以 uid 10001 运行；挂载 secrets/test → /run/secrets 时需目录可遍历、摘要文件可读。
+chmod 755 '$REMOTE_SECRETS/test' '$REMOTE_SECRETS/prod'
 [ -f '$REMOTE_SECRETS/test/redemption_codes.json' ] && \
-  chmod 600 '$REMOTE_SECRETS/test/redemption_codes.json'
+  chmod 644 '$REMOTE_SECRETS/test/redemption_codes.json'
 [ -f '$REMOTE_SECRETS/prod/redemption_codes.json' ] && \
-  chmod 600 '$REMOTE_SECRETS/prod/redemption_codes.json'
+  chmod 644 '$REMOTE_SECRETS/prod/redemption_codes.json'
 ls -la '$REMOTE_SECRETS' '$REMOTE_SECRETS/test' '$REMOTE_SECRETS/prod' 2>/dev/null || ls -la '$REMOTE_SECRETS'
 EOF
 

@@ -11,10 +11,11 @@
 
 本期范围：
 
-- 已登录用户通过活动口令领取一个自然月的非自动续费畅游月卡。
+- 已登录用户通过活动口令领取一个生产自然月的非自动续费畅游月卡；非生产环境按测试时钟压缩为
+  300 秒。
 - 支持 `ONCE_PER_ACCOUNT` 与 `UNLIMITED_PER_ACCOUNT` 两种活动账号规则。
 - 一个活动可以绑定多个不同口令；这些口令共享活动总额度和账号额度。
-- 同一账号重复兑换时按自然月连续叠加，不因短月丢失原始日期锚点。
+- 同一账号重复兑换时按当前环境的月边界连续叠加；生产环境不因短月丢失原始日期锚点。
 - 生效中的赠送月卡禁止客户端发起 Huawei 自动续费月卡购买。
 - 收费角色可以配置限免时间窗；当前限免对匿名和登录用户都生效。
 - bootstrap 和最终权益判断统一反映口令月卡与限免结果。
@@ -34,7 +35,7 @@
 - 动态写数据库的活动和限免配置。
 - 单个口令的独立次数上限；额度只按活动和账号统计。
 - 未来限免预告。
-- 口令赠送时长配置；每次成功兑换固定赠送一个自然月。
+- 口令赠送时长配置；每次成功兑换固定赠送一个环境月，生产为自然月，非生产为 300 秒。
 - 将角色限免转成永久权益或写入 `entitlement_grants`。
 - 多实例共享限流；当前部署保持单 API 实例，扩容前再迁移到 Redis 或数据库限流。
 
@@ -42,7 +43,7 @@
 
 ### 2.1 口令活动
 
-1. 每次成功兑换固定赠送一个自然月 `pass.all`。
+1. 每次成功兑换固定赠送一个月 `pass.all`：生产环境为自然月，非生产环境为 300 秒测试月。
 2. 一个 `campaignKey` 可以绑定多个 `codeKey`。
 3. 同一活动下的所有口令共享：
    - `maxTotalRedemptions`；
@@ -157,7 +158,7 @@ type RedemptionCampaign struct {
 }
 ```
 
-第一版不增加 `grantMonths`。每次成功兑换在业务代码中固定为一个自然月，避免配置与产品规则漂移。
+第一版不增加 `grantMonths`。每次成功兑换在业务代码中固定为一个环境月，避免配置与产品规则漂移。
 
 示例仅展示结构，不代表真实活动：
 
@@ -305,7 +306,7 @@ REDEMPTION_CODES_PATH
 | `chain_anchor_at` | 该链第一月的原始时间锚点 |
 | `month_ordinal` | 本次兑换完成后的月份序号，从 1 开始 |
 | `redeemed_at` | 服务端确认成功时间 |
-| `grant_starts_at` / `grant_ends_at` | 本次新增的一个自然月区间 |
+| `grant_starts_at` / `grant_ends_at` | 本次新增的一个生产自然月或非生产测试月区间 |
 | `entitlement_grant_id` | 对应 `entitlement_grants` 行 |
 
 `account_sequence` 按 `campaignKey + userId` 计数；`month_ordinal` 按用户当前赠送链计数。因此用户用
@@ -367,6 +368,10 @@ ends_at         = 本次 grant_ends_at
 - 客户端只负责本地展示，不参与月界计算。
 - 区间统一左闭右开。
 
+环境由 `APP_ENV` 决定：`prod` 或 `production` 使用真实自然月；其他值（包括 `test`、`staging`、
+`development`）启用测试时钟。测试时钟与 Huawei 沙盒保持同一换算概念：1 天为 10 秒，固定按
+30 天计算一个兑换月，因此一次兑换有效 300 秒。活动自身的开始/结束时间不加速。
+
 ### 7.2 月边界函数
 
 不能直接在上一次截断日期上连续调用 `AddDate`。定义：
@@ -394,14 +399,23 @@ n=3  2027-04-30T02:00:00Z
 - 不存在：建立新 `chain_id`，`anchor = now`，本次 `monthOrdinal = 1`；
 - 存在：沿用其 `chain_id` 和 `chain_anchor_at`，本次 `monthOrdinal = maxOrdinal + 1`。
 
-计算：
+生产环境计算：
 
 ```text
 grantStartsAt = calendarBoundary(chainAnchorAt, monthOrdinal - 1)
 grantEndsAt   = calendarBoundary(chainAnchorAt, monthOrdinal)
 ```
 
+非生产环境计算：
+
+```text
+grantStartsAt = chainAnchorAt + (monthOrdinal - 1) * 300 秒
+grantEndsAt   = chainAnchorAt + monthOrdinal * 300 秒
+```
+
 如果历史数据存在不连续或重叠区间，事务拒绝继续叠加并报告需要人工修复，不能静默产生第二条活跃链。
+启用测试时钟前已经创建的活跃自然月链不会被追溯缩短；为了保持已发权益不可变，该链继续使用自然月
+边界，过期后建立的新链才使用 300 秒边界。
 
 ## 8. 兑换 API
 
@@ -525,7 +539,7 @@ Huawei 没有按 OneBeat 用户 ID 查询全部订阅的服务端接口，因此
 5. 检查账号规则。当前实现保留精确账号次数，因为它复用赠送链本来就需要的用户锁，没有为次数限制
    新增共享锁；
 6. 查询未撤销且尚未结束的赠送链，拒绝多个活跃链或不连续的链尾；
-7. 在事务内生成兑换、grant 和链 UUID，并按原始锚点计算本次自然月边界；
+7. 在事务内生成兑换、grant 和链 UUID，并按原始锚点及当前环境时钟计算本次月边界；
 8. 插入 `entitlement_grants`、`redemptions` 和 `entitlement_audit_logs`；
 9. 原子增加该活动下当前账号的成功次数；
 10. 提交事务。
@@ -743,6 +757,9 @@ grant_ends_at
 - 3 月 31 日到 4 月 30 日，再到 5 月 31 日。
 - 年末跨年、纳秒保留和 UTC 一致性。
 - 过期后重新兑换建立新锚点。
+- `APP_ENV=prod/production` 仍使用自然月，其他环境一个兑换月严格为 300 秒。
+- 非生产环境重复兑换按同一锚点生成连续的 300 秒区间。
+- 测试时钟上线前的活跃自然月链不被缩短，后续月份仍保持原链 cadence。
 
 ### 15.4 幂等与并发集成测试
 

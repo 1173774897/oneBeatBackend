@@ -90,6 +90,7 @@ func main() {
 		huaweiIAPClient,
 		storeConfig.PurchaseBindingSecret,
 		storeConfig.PurchaseTokenEncryptionKey,
+		storeConfig.Environment,
 	)
 	storeService.ConfigureRedemptions(redemptionCodes)
 	storeServices := &httpapi.StoreServices{

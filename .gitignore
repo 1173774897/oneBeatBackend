@@ -18,3 +18,4 @@ deploy/secrets/test/redemption_codes.json
 deploy/secrets/prod/redemption_codes.json
 !deploy/secrets/test/*.example
 !deploy/secrets/prod/*.example
+.DS_Store

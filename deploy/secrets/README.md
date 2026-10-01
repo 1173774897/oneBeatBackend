@@ -115,8 +115,9 @@ scp -i "$KEY" deploy/secrets/prod.env  "$HOST:$REMOTE/prod.env"
 scp -i "$KEY" deploy/secrets/test/redemption_codes.json  "$HOST:$REMOTE/test/redemption_codes.json"
 scp -i "$KEY" deploy/secrets/prod/redemption_codes.json  "$HOST:$REMOTE/prod/redemption_codes.json"
 
-ssh -i "$KEY" "$HOST" 'chmod 700 '"$REMOTE"'/test '"$REMOTE"'/prod; \
-  chmod 600 '"$REMOTE"'/*.env '"$REMOTE"'/test/* '"$REMOTE"'/prod/*; \
+ssh -i "$KEY" "$HOST" 'chmod 600 '"$REMOTE"'/*.env; \
+  chmod 755 '"$REMOTE"'/test '"$REMOTE"'/prod; \
+  chmod 644 '"$REMOTE"'/test/redemption_codes.json '"$REMOTE"'/prod/redemption_codes.json 2>/dev/null || true; \
   ls -la '"$REMOTE"' '"$REMOTE"'/test '"$REMOTE"'/prod'
 ```
 

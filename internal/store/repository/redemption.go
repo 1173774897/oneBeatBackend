@@ -42,8 +42,11 @@ type ApplyRedemptionInput struct {
 	ConfigVersion   string
 	IdempotencyKey  string
 	PerAccountLimit int
-	Now             time.Time
-	RequestID       string
+	// GrantMonthDuration is zero for production calendar months and positive for
+	// an accelerated non-production month.
+	GrantMonthDuration time.Duration
+	Now                time.Time
+	RequestID          string
 }
 
 // ApproximateCampaignRedemptionCount intentionally takes an unlocked MVCC snapshot.
@@ -113,9 +116,9 @@ func (r *Repository) HasActiveIAPSubscription(ctx context.Context, userID string
 	return active, nil
 }
 
-// ApplyRedemption atomically appends one calendar month to a user's gift-pass
-// chain. It retries only database failures for which replaying the whole
-// transaction is safe.
+// ApplyRedemption atomically appends one production or accelerated test month
+// to a user's gift-pass chain. It retries only database failures for which
+// replaying the whole transaction is safe.
 func (r *Repository) ApplyRedemption(ctx context.Context, input ApplyRedemptionInput) (RedemptionRecord, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -232,20 +235,28 @@ func (r *Repository) applyRedemptionOnce(ctx context.Context, input ApplyRedempt
 	chainID := generatedChainID
 	anchor := input.Now.UTC()
 	monthOrdinal := 1
+	grantMonthDuration := input.GrantMonthDuration
 	eventType := "GRANTED"
 	if len(chains) == 1 {
 		chainID = chains[0].id
 		anchor = chains[0].anchor.UTC()
 		monthOrdinal = chains[0].ordinal + 1
 		eventType = "EXTENDED"
-		if !chains[0].latestEnd.Equal(redemption.CalendarBoundary(anchor, chains[0].ordinal)) {
+		var validChain bool
+		grantMonthDuration, validChain = redemptionChainMonthDuration(
+			anchor,
+			chains[0].ordinal,
+			chains[0].latestEnd,
+			grantMonthDuration,
+		)
+		if !validChain {
 			// Never append to a broken chain: silently repairing it here could grant
 			// overlapping or missing time and make later aggregation ambiguous.
 			return RedemptionRecord{}, ErrRedemptionChainInvalid
 		}
 	}
-	grantStartsAt := redemption.CalendarBoundary(anchor, monthOrdinal-1)
-	grantEndsAt := redemption.CalendarBoundary(anchor, monthOrdinal)
+	grantStartsAt := redemption.GrantBoundary(anchor, monthOrdinal-1, grantMonthDuration)
+	grantEndsAt := redemption.GrantBoundary(anchor, monthOrdinal, grantMonthDuration)
 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO entitlement_grants
@@ -290,6 +301,24 @@ func (r *Repository) applyRedemptionOnce(ctx context.Context, input ApplyRedempt
 		RedeemedAt: input.Now, GrantStartsAt: grantStartsAt, GrantEndsAt: grantEndsAt,
 		PassExpiresAt: grantEndsAt,
 	}, nil
+}
+
+// redemptionChainMonthDuration preserves the cadence already persisted for an
+// active chain. This keeps legacy test grants immutable when acceleration is
+// introduced while requiring all newly created chains to use the configured mode.
+func redemptionChainMonthDuration(
+	anchor time.Time,
+	monthOrdinal int,
+	latestEnd time.Time,
+	configuredDuration time.Duration,
+) (time.Duration, bool) {
+	if latestEnd.Equal(redemption.GrantBoundary(anchor, monthOrdinal, configuredDuration)) {
+		return configuredDuration, true
+	}
+	if configuredDuration > 0 && latestEnd.Equal(redemption.CalendarBoundary(anchor, monthOrdinal)) {
+		return 0, true
+	}
+	return 0, false
 }
 
 func isSerializationFailure(err error) bool {

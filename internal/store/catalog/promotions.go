@@ -5,7 +5,10 @@ import (
 	"time"
 )
 
-const RedemptionRuleOncePerAccount = "ONCE_PER_ACCOUNT"
+const (
+	RedemptionRuleOncePerAccount      = "ONCE_PER_ACCOUNT"
+	RedemptionRuleUnlimitedPerAccount = "UNLIMITED_PER_ACCOUNT"
+)
 
 // RedemptionCampaign is public, versioned campaign metadata. Secret plaintext
 // codes and their HMAC digests deliberately live outside this package.
@@ -35,6 +38,15 @@ var redemptionCampaigns = []RedemptionCampaign{
 		EndsAt:             time.Date(2026, time.October, 1, 16, 0, 0, 0, time.UTC),
 		Rule:               RedemptionRuleOncePerAccount,
 		PerAccountLimit:    1,
+		GrantCalendarMonth: 1,
+	},
+	{
+		CampaignKey:        "campaign.xianluoexclusive",
+		CodeKeys:           []string{"code.xianluoexclusive"},
+		StartsAt:           time.Date(2026, time.September, 30, 16, 0, 0, 0, time.UTC),
+		EndsAt:             time.Date(2050, time.October, 1, 16, 0, 0, 0, time.UTC),
+		Rule:               RedemptionRuleUnlimitedPerAccount,
+		PerAccountLimit:    0,
 		GrantCalendarMonth: 1,
 	},
 }
@@ -120,7 +132,10 @@ func validatePromotions(itemKeys map[string]struct{}) error {
 		if campaign.CampaignKey == "" || len(campaign.CodeKeys) == 0 || !campaign.EndsAt.After(campaign.StartsAt) {
 			return fmt.Errorf("invalid redemption campaign %q", campaign.CampaignKey)
 		}
-		if campaign.Rule != RedemptionRuleOncePerAccount || campaign.PerAccountLimit != 1 || campaign.GrantCalendarMonth != 1 {
+		validAccountRule := campaign.Rule == RedemptionRuleOncePerAccount && campaign.PerAccountLimit == 1
+		validAccountRule = validAccountRule ||
+			campaign.Rule == RedemptionRuleUnlimitedPerAccount && campaign.PerAccountLimit == 0
+		if !validAccountRule || campaign.GrantCalendarMonth != 1 {
 			return fmt.Errorf("unsupported redemption campaign rule for %q", campaign.CampaignKey)
 		}
 		if _, exists := campaignKeys[campaign.CampaignKey]; exists {

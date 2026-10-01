@@ -1,6 +1,38 @@
 package redemption
 
-import "time"
+import (
+	"strings"
+	"time"
+)
+
+const (
+	// NonProductionDayDuration mirrors Huawei's sandbox clock: one product day
+	// passes every ten wall-clock seconds.
+	NonProductionDayDuration   = 10 * time.Second
+	NonProductionMonthDuration = 30 * NonProductionDayDuration
+)
+
+// MonthDurationForEnvironment returns zero when redemption grants must use real
+// calendar boundaries. Every non-production environment uses a fixed 300-second
+// month so expiry and repeated redemption can be exercised quickly.
+func MonthDurationForEnvironment(environment string) time.Duration {
+	switch strings.ToLower(strings.TrimSpace(environment)) {
+	case "prod", "production":
+		return 0
+	default:
+		return NonProductionMonthDuration
+	}
+}
+
+// GrantBoundary returns the boundary for a redemption chain. A zero duration
+// preserves production's calendar-month semantics; a positive duration enables
+// the non-production accelerated clock.
+func GrantBoundary(anchor time.Time, months int, acceleratedMonthDuration time.Duration) time.Time {
+	if acceleratedMonthDuration > 0 {
+		return anchor.UTC().Add(time.Duration(months) * acceleratedMonthDuration)
+	}
+	return CalendarBoundary(anchor, months)
+}
 
 // CalendarBoundary keeps the anchor's UTC wall-clock time and clamps its day in shorter months.
 func CalendarBoundary(anchor time.Time, months int) time.Time {

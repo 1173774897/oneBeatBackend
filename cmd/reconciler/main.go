@@ -63,6 +63,7 @@ func main() {
 		huaweiClient,
 		storeConfig.PurchaseBindingSecret,
 		storeConfig.PurchaseTokenEncryptionKey,
+		storeConfig.Environment,
 	)
 	var processor reconciliation.Processor = storeService
 	dailyJobName := reconciliation.DailyJobName

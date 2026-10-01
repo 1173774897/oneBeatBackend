@@ -41,12 +41,13 @@ type IAPClient interface {
 }
 
 type Service struct {
-	repository            *repository.Repository
-	iap                   IAPClient
-	purchaseBindingSecret []byte
-	tokenEncryptionKey    []byte
-	now                   func() time.Time
-	redemptionCodes       *redemption.CodeBook
+	repository              *repository.Repository
+	iap                     IAPClient
+	purchaseBindingSecret   []byte
+	tokenEncryptionKey      []byte
+	now                     func() time.Time
+	redemptionCodes         *redemption.CodeBook
+	redemptionMonthDuration time.Duration
 }
 
 // RedeemInput is the authenticated request body. IdempotencyKey is scoped to
@@ -80,7 +81,7 @@ func (s *Service) ConfigureRedemptions(codeBook *redemption.CodeBook) {
 }
 
 // Redeem validates a secret code, refreshes known Huawei subscriptions outside
-// the database transaction, and then applies one calendar-month grant.
+// the database transaction, and then applies one environment-specific month.
 func (s *Service) Redeem(ctx context.Context, userID string, input RedeemInput, requestID string) (RedeemResult, error) {
 	if s.redemptionCodes == nil || !uuidPattern.MatchString(input.IdempotencyKey) || input.Code == "" {
 		return RedeemResult{}, ErrRedemptionRequest
@@ -141,8 +142,9 @@ func (s *Service) Redeem(ctx context.Context, userID string, input RedeemInput, 
 	record, err := s.repository.ApplyRedemption(ctx, repository.ApplyRedemptionInput{
 		UserID: userID, CampaignKey: campaign.CampaignKey, CodeKey: codeKey,
 		ConfigVersion: catalog.ConfigVersion, IdempotencyKey: input.IdempotencyKey,
-		PerAccountLimit: campaign.PerAccountLimit,
-		Now:             now, RequestID: requestID,
+		PerAccountLimit:    campaign.PerAccountLimit,
+		GrantMonthDuration: s.redemptionMonthDuration,
+		Now:                now, RequestID: requestID,
 	})
 	if err != nil {
 		switch {
@@ -204,12 +206,14 @@ func New(
 	iap IAPClient,
 	purchaseBindingSecret []byte,
 	tokenEncryptionKey []byte,
+	environment string,
 ) *Service {
 	return &Service{
 		repository: repository, iap: iap,
-		purchaseBindingSecret: append([]byte(nil), purchaseBindingSecret...),
-		tokenEncryptionKey:    append([]byte(nil), tokenEncryptionKey...),
-		now:                   time.Now,
+		purchaseBindingSecret:   append([]byte(nil), purchaseBindingSecret...),
+		tokenEncryptionKey:      append([]byte(nil), tokenEncryptionKey...),
+		redemptionMonthDuration: redemption.MonthDurationForEnvironment(environment),
+		now:                     time.Now,
 	}
 }
 
