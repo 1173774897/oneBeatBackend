@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = "2026-10-02.1"
+const ConfigVersion = "2026-10-02.2"
 
 const (
 	KindPass      = "PASS"
@@ -158,10 +158,10 @@ func itemSnapshots(now time.Time, grants map[string]Access, pass PassSnapshot) [
 		// not be relabeled as a shorter-lived promotion.
 		if item.DefaultFree {
 			access = Access{Allowed: true, Reason: AccessDefaultFree}
-		} else if pass.Active && item.IncludedInPass {
-			access = Access{Allowed: true, Reason: pass.Source, ValidUntil: pass.ExpiresAt}
 		} else if grant, ok := grants[item.ItemKey]; ok {
 			access = grant
+		} else if pass.Active && item.IncludedInPass {
+			access = Access{Allowed: true, Reason: pass.Source, ValidUntil: pass.ExpiresAt}
 		} else if window, ok := CurrentFreeWindow(item.ItemKey, now); ok {
 			windowCopy := FreeWindow{StartsAt: window.StartsAt, EndsAt: window.EndsAt}
 			freeWindow = &windowCopy

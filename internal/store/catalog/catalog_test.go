@@ -64,3 +64,22 @@ func TestRedemptionPassBlocksIAPPurchase(t *testing.T) {
 		t.Fatalf("pass snapshot = %+v", bootstrap.Pass)
 	}
 }
+
+func TestPermanentPurchaseReasonWinsOverActivePass(t *testing.T) {
+	now := time.Date(2026, time.October, 2, 8, 0, 0, 0, time.UTC)
+	expiresAt := now.AddDate(0, 1, 0)
+	bootstrap := AuthenticatedBootstrap(now, "binding", map[string]Access{
+		"character.cloud": {Allowed: true, Reason: AccessIAPPurchase},
+	}, PassSnapshot{Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt})
+
+	for _, item := range bootstrap.Items {
+		if item.ItemKey != "character.cloud" {
+			continue
+		}
+		if item.Access.Reason != AccessIAPPurchase {
+			t.Fatalf("cloud access reason = %q, want %q", item.Access.Reason, AccessIAPPurchase)
+		}
+		return
+	}
+	t.Fatal("cloud is missing from catalog")
+}
