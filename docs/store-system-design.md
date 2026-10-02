@@ -610,18 +610,7 @@ token 应以华为实际协议为准。订单唯一性以 `huawei_order_id` 为�
 需要检查约束：`grant_ends_at > grant_starts_at`、`month_ordinal > 0`、
 `account_sequence > 0`。
 
-### 9.6 `redemption_campaign_usage`
-
-| 字段 | 类型 | 约束/说明 |
-| --- | --- | --- |
-| `campaign_key` | `text` | 主键，对应代码配置 ID |
-| `redeemed_count` | `bigint` | 非负，活动全局成功次数 |
-| `updated_at` | `timestamptz` | 非空 |
-
-该表保留给历史统计或离线汇总，不参与在线额度判定。在线兑换直接按 `redemptions.campaign_key`
-读取成功记录近似计数；不获取活动级共享锁，因此高并发时总额度允许少量超发。
-
-### 9.7 `redemption_account_usage`
+### 9.6 `redemption_account_usage`
 
 | 字段 | 类型 | 约束/说明 |
 | --- | --- | --- |
@@ -632,7 +621,7 @@ token 应以华为实际协议为准。订单唯一性以 `huawei_order_id` 为�
 
 `ONCE_PER_ACCOUNT` 在锁定本行后要求 `redeemed_count = 0`；无限模式不做账号次数上限检查。
 
-### 9.8 `iap_webhook_events`
+### 9.7 `iap_webhook_events`
 
 | 字段 | 类型 | 约束/说明 |
 | --- | --- | --- |
@@ -647,7 +636,7 @@ token 应以华为实际协议为准。订单唯一性以 `huawei_order_id` 为�
 | `last_error` | `text` | 最近错误，不能包含 token |
 | `received_at` / `processed_at` | `timestamptz` | 接收和完成时间 |
 
-### 9.9 `entitlement_audit_logs`
+### 9.8 `entitlement_audit_logs`
 
 记录 `GRANTED`、`EXTENDED`、`EXPIRED`、`REFUNDED`、`REVOKED` 和 `RESTORED`。至少包含
 用户、权益键、来源、来源 ID、变更前后摘要、请求/事件 ID 和发生时间。审计记录只追加，不更新。
@@ -955,8 +944,9 @@ JSON 在 `secrets/test/`、`secrets/prod/` 下挂载为容器 `/run/secrets`。*
 
 截至 `2026-10-02`，登录、目录、IAP、口令兑换和角色限免主链路已落地：
 
-- `migrations/000002_create_store_domain.*.sql` 已创建 §9 的全部事实表、约束和查询索引，并在本地
-  `onebeat_test` 通过 golang-migrate 实际执行。
+- `migrations/000002_create_store_domain.*.sql` 已创建 §9 的事实表和基础约束；后续迁移补充兑换与
+  热点查询索引，并移除未被业务读写的活动级计数表。全部迁移在本地 `onebeat_test` 通过
+  golang-migrate 实际执行。
 - `internal/store/catalog` 已写入稳定 `itemKey`、Huawei `productId`、默认免费策略和启动校验；当前配置
   了 2026-10-01 当日口令活动和“轮滑小子”限免窗口。
 - `POST /api/v1/auth/huawei` 已实现客户端 ID Token 验证、一次性授权码交换、服务端 ID Token 验证、

@@ -123,24 +123,47 @@ func (r *Repository) FindPurchaseOwner(
 	developerPayload string,
 ) (OrderLookup, error) {
 	var lookup OrderLookup
-	err := r.pool.QueryRow(ctx, `
-		SELECT user_id::text, item_key, huawei_product_id, product_type,
-		       developer_payload, subscription_id::text
-		FROM iap_provider_transactions
-		WHERE provider = 'HUAWEI' AND environment = $1
-		  AND (
-			purchase_order_id = $2
-			OR purchase_token_hash = $3
-			OR (NULLIF($4, '') IS NOT NULL AND developer_payload = $4)
-		  )
-		ORDER BY
-		  CASE WHEN purchase_order_id = $2 THEN 0 WHEN purchase_token_hash = $3 THEN 1 ELSE 2 END,
-		  verified_at DESC
-		LIMIT 1
-	`, environment, purchaseOrderID, purchaseTokenHash, developerPayload).Scan(
-		&lookup.UserID, &lookup.ItemKey, &lookup.ProductID, &lookup.ProductType,
-		&lookup.DeveloperPayload, &lookup.SubscriptionID,
-	)
+	scanTransaction := func(row pgx.Row) error {
+		return row.Scan(
+			&lookup.UserID, &lookup.ItemKey, &lookup.ProductID, &lookup.ProductType,
+			&lookup.DeveloperPayload, &lookup.SubscriptionID,
+		)
+	}
+
+	// Keep the provider-identity priority explicit while allowing each lookup to
+	// use its selective index. A single OR query can degrade into scanning every
+	// transaction in an environment once PostgreSQL switches to a generic plan.
+	err := pgx.ErrNoRows
+	if purchaseOrderID != "" {
+		err = scanTransaction(r.pool.QueryRow(ctx, `
+			SELECT user_id::text, item_key, huawei_product_id, product_type,
+			       developer_payload, subscription_id::text
+			FROM iap_provider_transactions
+			WHERE provider = 'HUAWEI' AND environment = $1 AND purchase_order_id = $2
+			ORDER BY verified_at DESC
+			LIMIT 1
+		`, environment, purchaseOrderID))
+	}
+	if errors.Is(err, pgx.ErrNoRows) && len(purchaseTokenHash) > 0 {
+		err = scanTransaction(r.pool.QueryRow(ctx, `
+			SELECT user_id::text, item_key, huawei_product_id, product_type,
+			       developer_payload, subscription_id::text
+			FROM iap_provider_transactions
+			WHERE provider = 'HUAWEI' AND environment = $1 AND purchase_token_hash = $2
+			ORDER BY verified_at DESC
+			LIMIT 1
+		`, environment, purchaseTokenHash))
+	}
+	if errors.Is(err, pgx.ErrNoRows) && developerPayload != "" {
+		err = scanTransaction(r.pool.QueryRow(ctx, `
+			SELECT user_id::text, item_key, huawei_product_id, product_type,
+			       developer_payload, subscription_id::text
+			FROM iap_provider_transactions
+			WHERE provider = 'HUAWEI' AND environment = $1 AND developer_payload = $2
+			ORDER BY verified_at DESC
+			LIMIT 1
+		`, environment, developerPayload))
+	}
 	if errors.Is(err, pgx.ErrNoRows) && developerPayload != "" {
 		err = r.pool.QueryRow(ctx, `
 			SELECT user_id::text, item_key, huawei_product_id, 'AUTORENEWABLE',
