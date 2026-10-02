@@ -155,6 +155,27 @@ Actions 只部署镜像与迁移，**不会**复制 `secrets/`；改秘密后只
 
 ## 生成随机秘密
 
+生成口令摘要时，脚本会要求两次输入，并在 stderr 提示使用的 env 文件。必须选用目标环境的
+env，生成后把 stdout 的摘要填入对应 `codeKey`；输入不会显示，也不会写入文件。
+
+```bash
+./scripts/create-redemption.sh deploy/secrets/test.env
+```
+
+可在上传前校验口令、pepper 和摘要是否一致（校验不会修改文件或输出摘要）：
+
+```bash
+./scripts/create-redemption.sh --check code.xianluoexclusive deploy/secrets/test/redemption_codes.json deploy/secrets/test.env
+```
+
+服务器也可以用同一个脚本校验其实际秘密文件：
+
+```bash
+./scripts/create-redemption.sh --check code.xianluoexclusive /opt/onebeatbackend/secrets/test/redemption_codes.json /opt/onebeatbackend/secrets/test.env
+```
+
+摘要和 pepper 必须一起部署；服务只在启动时加载它们，更新后需要重新创建容器。
+
 ```bash
 openssl rand -hex 32
 ```
