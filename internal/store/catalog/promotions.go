@@ -55,7 +55,7 @@ var limitedFreeWindows = []LimitedFreeWindow{
 	{
 		ItemKey:  "character.lilroll",
 		StartsAt: time.Date(2026, time.September, 30, 16, 0, 0, 0, time.UTC),
-		EndsAt:   time.Date(2026, time.October, 1, 16, 0, 0, 0, time.UTC),
+		EndsAt:   time.Date(2026, time.October, 10, 16, 0, 0, 0, time.UTC),
 	},
 }
 
