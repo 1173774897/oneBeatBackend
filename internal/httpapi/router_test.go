@@ -175,7 +175,7 @@ func TestStoreBootstrapReturnsSafeAnonymousCatalog(t *testing.T) {
 	for _, item := range data.Items {
 		allowed[item.ItemKey] = item.Access.Allowed
 	}
-	if !allowed["character.matchman"] || !allowed["scene.sunset_coast"] || allowed["scene.neon_street"] {
+	if allowed["character.lamp"] || !allowed["scene.sunset_coast"] || allowed["scene.neon_street"] {
 		t.Fatalf("unexpected anonymous access: %+v", allowed)
 	}
 }

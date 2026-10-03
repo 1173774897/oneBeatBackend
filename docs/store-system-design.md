@@ -29,7 +29,7 @@
 
 | 角色 | `itemKey` | 默认免费 | 可单独购买 | 可限免 | 月卡包含 | 可重复选择 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 火柴人 | `character.matchman` | 是 | 否 | 不需要 | 是 | 是 |
+| 台灯漫游者 | `character.lamp` | 否 | 是 | 是 | 是 | 否 |
 | 云行者 | `character.cloud` | 否 | 是 | 是 | 是 | 否 |
 | 茶壶太太 | `character.teapot` | 否 | 是 | 是 | 是 | 否 |
 | Wave | `character.wave` | 否 | 是 | 是 | 是 | 否 |
@@ -117,6 +117,7 @@ GroupUnionID；只有未来需要在不同开发者账号所属的应用之间�
 | OneBeat 权益 | Huawei 商品 ID | 商品类型 |
 | --- | --- | --- |
 | 畅游月卡 | `onebeat.pass.monthly` | 自动续费订阅 |
+| 台灯漫游者 | `onebeat.character.lamp` | 非消耗型 |
 | 云行者 | `onebeat.character.cloud` | 非消耗型 |
 | 茶壶太太 | `onebeat.character.teapot` | 非消耗型 |
 | Wave | `onebeat.character.wave` | 非消耗型 |
@@ -125,7 +126,7 @@ GroupUnionID；只有未来需要在不同开发者账号所属的应用之间�
 | 轮滑小子 | `onebeat.character.lilroll` | 非消耗型 |
 | 霓虹街口 | `onebeat.scene.neon_street` | 非消耗型 |
 
-火柴人、夕阳海边和 PRO 定制鼓机不创建独立 IAP 商品。客户端显示的实际价格必须来自 IAP
+夕阳海边和 PRO 定制鼓机不创建独立 IAP 商品。客户端显示的实际价格必须来自 IAP
 商品查询结果，不能在 ArkTS 或后端代码中写死人民币价格。
 
 ### 3.2 权益判定优先级

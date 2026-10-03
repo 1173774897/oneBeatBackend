@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = "2026-10-02.2"
+const ConfigVersion = "2026-10-03.1"
 
 const (
 	KindPass      = "PASS"
@@ -82,7 +82,7 @@ type Bootstrap struct {
 
 var items = []Item{
 	{ItemKey: "pass.all", DisplayName: "畅游月卡", Kind: KindPass, HuaweiProductID: "onebeat.pass.monthly", IAPProductType: ProductAutoRenewable, IncludedInPass: true},
-	{ItemKey: "character.matchman", DisplayName: "火柴人", Kind: KindCharacter, DefaultFree: true, IncludedInPass: true, RepeatableChoice: true},
+	{ItemKey: "character.lamp", DisplayName: "台灯漫游者", Kind: KindCharacter, HuaweiProductID: "onebeat.character.lamp", IAPProductType: ProductNonConsumable, IncludedInPass: true},
 	{ItemKey: "character.cloud", DisplayName: "云行者", Kind: KindCharacter, HuaweiProductID: "onebeat.character.cloud", IAPProductType: ProductNonConsumable, IncludedInPass: true},
 	{ItemKey: "character.teapot", DisplayName: "茶壶太太", Kind: KindCharacter, HuaweiProductID: "onebeat.character.teapot", IAPProductType: ProductNonConsumable, IncludedInPass: true},
 	{ItemKey: "character.wave", DisplayName: "Wave", Kind: KindCharacter, HuaweiProductID: "onebeat.character.wave", IAPProductType: ProductNonConsumable, IncludedInPass: true},
@@ -206,6 +206,12 @@ func Validate() error {
 				return fmt.Errorf("item %q has product type without product ID", item.ItemKey)
 			}
 			continue
+		}
+		// Every separately sold character and scene is part of the all-content
+		// pass. Reject an incomplete catalog before it can hide a new release from
+		// existing subscribers.
+		if (item.Kind == KindCharacter || item.Kind == KindScene) && !item.IncludedInPass {
+			return fmt.Errorf("paid item %q must be included in pass", item.ItemKey)
 		}
 		if item.IAPProductType != ProductNonConsumable && item.IAPProductType != ProductAutoRenewable {
 			return fmt.Errorf("item %q has unsupported product type %q", item.ItemKey, item.IAPProductType)

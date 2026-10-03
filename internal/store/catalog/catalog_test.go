@@ -26,11 +26,11 @@ func TestAnonymousBootstrapOnlyUnlocksDefaults(t *testing.T) {
 	for _, item := range bootstrap.Items {
 		allowed[item.ItemKey] = item.Access.Allowed
 	}
-	if !allowed["character.matchman"] || !allowed["scene.sunset_coast"] {
+	if !allowed["scene.sunset_coast"] {
 		t.Fatalf("default items are not available: %+v", allowed)
 	}
 	for itemKey, itemAllowed := range allowed {
-		if itemAllowed && itemKey != "character.matchman" && itemKey != "scene.sunset_coast" {
+		if itemAllowed && itemKey != "scene.sunset_coast" {
 			t.Fatalf("paid item %q is available anonymously", itemKey)
 		}
 	}
@@ -82,4 +82,26 @@ func TestPermanentPurchaseReasonWinsOverActivePass(t *testing.T) {
 		return
 	}
 	t.Fatal("cloud is missing from catalog")
+}
+
+func TestActivePassUnlocksEveryPaidCharacterAndScene(t *testing.T) {
+	now := time.Date(2026, time.October, 3, 8, 0, 0, 0, time.UTC)
+	expiresAt := now.AddDate(0, 1, 0)
+	bootstrap := AuthenticatedBootstrap(now, "binding", nil, PassSnapshot{
+		Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt,
+	})
+
+	checked := 0
+	for _, item := range bootstrap.Items {
+		if item.HuaweiProductID == "" || (item.Kind != KindCharacter && item.Kind != KindScene) {
+			continue
+		}
+		checked++
+		if !item.IncludedInPass || !item.Access.Allowed || item.Access.Reason != AccessIAPPass {
+			t.Errorf("paid item %q is not unlocked by pass: %+v", item.ItemKey, item)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("catalog has no paid characters or scenes")
+	}
 }
