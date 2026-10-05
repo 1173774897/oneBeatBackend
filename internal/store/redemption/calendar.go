@@ -6,15 +6,16 @@ import (
 )
 
 const (
-	// NonProductionDayDuration mirrors Huawei's sandbox clock: one product day
-	// passes every ten wall-clock seconds.
-	NonProductionDayDuration   = 10 * time.Second
+	// NonProductionDayDuration is one accelerated "product day" in non-production
+	// redemption grants (30 such days form one test month).
+	NonProductionDayDuration   = time.Hour
 	NonProductionMonthDuration = 30 * NonProductionDayDuration
 )
 
 // MonthDurationForEnvironment returns zero when redemption grants must use real
-// calendar boundaries. Every non-production environment uses a fixed 300-second
-// month so expiry and repeated redemption can be exercised quickly.
+// calendar boundaries. Every non-production environment uses a fixed accelerated
+// month (30 × NonProductionDayDuration) so expiry and repeated redemption can
+// be exercised without waiting for real calendar months.
 func MonthDurationForEnvironment(environment string) time.Duration {
 	switch strings.ToLower(strings.TrimSpace(environment)) {
 	case "prod", "production":

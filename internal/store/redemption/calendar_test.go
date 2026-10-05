@@ -27,18 +27,18 @@ func TestMonthDurationForEnvironmentAcceleratesOnlyNonProduction(t *testing.T) {
 		}
 	}
 	for _, environment := range []string{"test", "development", "staging", ""} {
-		if got := MonthDurationForEnvironment(environment); got != 300*time.Second {
-			t.Fatalf("MonthDurationForEnvironment(%q) = %s, want 300s", environment, got)
+		if got := MonthDurationForEnvironment(environment); got != NonProductionMonthDuration {
+			t.Fatalf("MonthDurationForEnvironment(%q) = %s, want %s", environment, got, NonProductionMonthDuration)
 		}
 	}
 }
 
-func TestGrantBoundaryUsesFiveMinuteMonthsWhenAccelerated(t *testing.T) {
+func TestGrantBoundaryUsesAcceleratedMonthsWhenConfigured(t *testing.T) {
 	anchor := time.Date(2027, time.January, 31, 2, 3, 4, 5, time.UTC)
 	for months, want := range []time.Time{
 		anchor,
-		anchor.Add(300 * time.Second),
-		anchor.Add(600 * time.Second),
+		anchor.Add(NonProductionMonthDuration),
+		anchor.Add(2 * NonProductionMonthDuration),
 	} {
 		if got := GrantBoundary(anchor, months, NonProductionMonthDuration); !got.Equal(want) {
 			t.Fatalf("GrantBoundary(%d) = %s, want %s", months, got, want)

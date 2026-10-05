@@ -18,7 +18,7 @@ func TestRedemptionChainMonthDurationUsesConfiguredAcceleration(t *testing.T) {
 		redemption.NonProductionMonthDuration,
 	)
 	if !ok || duration != redemption.NonProductionMonthDuration {
-		t.Fatalf("duration=%s ok=%t, want 300s true", duration, ok)
+		t.Fatalf("duration=%s ok=%t, want %s true", duration, ok, redemption.NonProductionMonthDuration)
 	}
 }
 
