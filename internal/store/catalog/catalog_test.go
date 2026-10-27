@@ -59,7 +59,7 @@ func TestRedemptionPassBlocksIAPPurchase(t *testing.T) {
 	expiresAt := now.AddDate(0, 1, 0)
 	bootstrap := AuthenticatedBootstrap(now, "binding", nil, PassSnapshot{
 		Active: true, Source: AccessRedemption, ExpiresAt: &expiresAt,
-	})
+	}, ShareRewardSnapshot{})
 	if bootstrap.Pass.IAPPurchaseAllowed || bootstrap.Pass.IAPPurchaseBlockedReason != IAPPurchaseBlockedGiftActive {
 		t.Fatalf("pass snapshot = %+v", bootstrap.Pass)
 	}
@@ -70,7 +70,7 @@ func TestPermanentPurchaseReasonWinsOverActivePass(t *testing.T) {
 	expiresAt := now.AddDate(0, 1, 0)
 	bootstrap := AuthenticatedBootstrap(now, "binding", map[string]Access{
 		"character.cloud": {Allowed: true, Reason: AccessIAPPurchase},
-	}, PassSnapshot{Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt})
+	}, PassSnapshot{Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt}, ShareRewardSnapshot{})
 
 	for _, item := range bootstrap.Items {
 		if item.ItemKey != "character.cloud" {
@@ -89,7 +89,7 @@ func TestActivePassUnlocksEveryPaidCharacterAndScene(t *testing.T) {
 	expiresAt := now.AddDate(0, 1, 0)
 	bootstrap := AuthenticatedBootstrap(now, "binding", nil, PassSnapshot{
 		Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt,
-	})
+	}, ShareRewardSnapshot{})
 
 	checked := 0
 	for _, item := range bootstrap.Items {

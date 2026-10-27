@@ -21,6 +21,7 @@ const (
 	AccessIAPPurchase = "IAP_PURCHASE"
 	AccessIAPPass     = "PASS_IAP"
 	AccessRedemption  = "PASS_REDEMPTION"
+	AccessShareReward = "PASS_SHARE_REWARD"
 	AccessLimitedFree = "LIMITED_FREE"
 
 	IAPPurchaseBlockedGiftActive = "ACTIVE_REDEMPTION_PASS"
@@ -78,6 +79,7 @@ type Bootstrap struct {
 	Pass             PassSnapshot       `json:"pass"`
 	Items            []ItemSnapshot     `json:"items"`
 	Redemption       RedemptionSnapshot `json:"redemption"`
+	ShareReward      ShareRewardSnapshot `json:"shareReward"`
 }
 
 var items = []Item{
@@ -128,6 +130,7 @@ func AnonymousBootstrap(now time.Time) Bootstrap {
 		Pass:          finalizePass(PassSnapshot{}),
 		Items:         itemSnapshots(now, nil, PassSnapshot{}),
 		Redemption:    RedemptionSnapshot{Available: len(ActiveRedemptionCampaigns(now)) > 0},
+		ShareReward:   AnonymousShareRewardSnapshot(now),
 	}
 }
 
@@ -137,6 +140,7 @@ func AuthenticatedBootstrap(
 	developerPayload string,
 	grants map[string]Access,
 	pass PassSnapshot,
+	shareReward ShareRewardSnapshot,
 ) Bootstrap {
 	pass = finalizePass(pass)
 	return Bootstrap{
@@ -146,6 +150,7 @@ func AuthenticatedBootstrap(
 		Pass:             pass,
 		Items:            itemSnapshots(now, grants, pass),
 		Redemption:       RedemptionSnapshot{Available: len(ActiveRedemptionCampaigns(now)) > 0},
+		ShareReward:      shareReward,
 	}
 }
 
