@@ -194,7 +194,7 @@ func (r *Repository) Bootstrap(
 		}
 	}
 
-	return catalog.AuthenticatedBootstrap(now, developerPayload, grants, pass), nil
+	return catalog.AuthenticatedBootstrap(now, developerPayload, grants, pass, catalog.ShareRewardSnapshot{}), nil
 }
 
 func (r *Repository) ApplyNonConsumable(ctx context.Context, record OrderRecord, now time.Time) (ApplyResult, error) {
