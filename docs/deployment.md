@@ -20,7 +20,9 @@ Vultr 已按本文档后续章节跑通后，日常改代码**不必**在本地�
 Vultr 上跑 **test 镜像** 做与线上一致的最后一跳。
 
 收藏小铺的业务规则、华为接入与秘密含义见 [store-system-design.md](store-system-design.md)；
-秘密文件布局见 [deploy/secrets/README.md](../deploy/secrets/README.md)。
+秘密文件布局见 [deploy/secrets/README.md](../deploy/secrets/README.md)。  
+分机、代理、本机 SSH 别名等 **不属于** 公共部署步骤，见 [operations-notes-local.md](operations-notes-local.md)
+（个人备忘，计划移出本仓库）。
 
 ### 与 Vultr 对照
 
@@ -218,7 +220,20 @@ git push -u origin staging
 
 ## 2. Vultr 一次性准备
 
-### 2.1 三类权限不要混淆
+OneBeat 部署需要 **一台** 运行 Docker 的 Linux 服务器（API + PostgreSQL + Certbot）。选购与防火墙
+只针对该机器上的 **22 / 80 / 443 / 8443**；本文不包含代理、VPN 或其他中间件。
+
+### 2.1 购机与防火墙（OneBeat 主机）
+
+推荐 **Vultr Cloud Compute**（Shared），**Ubuntu 22.04 / 24.04 LTS**，**2 vCPU / 4 GB RAM**
+（staging 与 prod 同机双库时的常用起点）。创建实例时绑定 **个人 SSH 公钥**（日常登录 root 或
+后续配置的 `onebeat`）。**Dedicated CPU（vx1）** 等产品线可能要求单独创建 Boot Block Storage；
+若仅部署 OneBeat，优先 Cloud Compute 并在同一流程中选择系统盘与 OS。
+
+在 **Vultr Firewall Group** 与主机 **UFW**（若启用）中放行入站 **TCP 22、80、443、8443**。
+**不要** 对公网开放 **5432**（Postgres 仅绑定服务器 `127.0.0.1`，见 §5.1）。
+
+### 2.2 三类权限不要混淆
 
 整个部署过程涉及三类相互独立的身份验证：
 
@@ -231,7 +246,7 @@ git push -u origin staging
 这三步不能互相替代。root 密码只是 root 的密码，不能拿来登录 `onebeat`。下面创建
 `onebeat` 时不设置密码，GitHub Actions 只使用专用 SSH 密钥登录。
 
-### 2.2 安装 Docker 并创建部署用户
+### 2.3 安装 Docker 并创建部署用户
 
 先以 root 登录 Vultr，执行：
 
@@ -247,30 +262,28 @@ SSH 公钥登录时就是一个新会话，因此会自动加载 `docker` 组，
 
 Docker 组可以控制宿主机上的容器，权限接近 root，只应授予专用部署账号。
 
-### 2.3 把应用移出 `/root`
+### 2.4 初始化 `/opt/onebeatbackend`
 
-不要继续使用 `/root/opt/onebeatbackend`。`/root` 通常只有 root 可以进入，即使把最内层目录
-改成 `onebeat` 所有，`onebeat` 仍无法穿过父目录。
+工作流中的 `DEPLOY_ROOT` 固定为 `/opt/onebeatbackend`。**新购服务器（绿机）** 以 root 执行：
 
-以 root 执行：
+```bash
+mkdir -p /opt/onebeatbackend/{certs/prod,certs/test,data/prod,data/test,secrets/test,secrets/prod,backups,migrations,postgres/init}
+chown -R onebeat:onebeat /opt/onebeatbackend
+sudo -u onebeat ls -la /opt/onebeatbackend
+```
+
+**仅当** 曾把应用放在 `/root/opt/onebeatbackend` 时，才需要迁出 `/root`（`/root` 通常只有 root
+可进入，`onebeat` 无法穿过父目录访问其下目录）：
 
 ```bash
 mkdir -p /opt/onebeatbackend
 cp -a /root/opt/onebeatbackend/. /opt/onebeatbackend/
-mkdir -p /opt/onebeatbackend/{certs/prod,certs/test,data/prod,data/test}
 chown -R onebeat:onebeat /opt/onebeatbackend
 ```
 
-先验证新目录，再决定是否删除旧目录：
+不要通过放宽 `/root` 权限来解决权限问题。
 
-```bash
-sudo -u onebeat ls -la /opt/onebeatbackend
-```
-
-不要通过放宽 `/root` 权限来解决这个问题。工作流中的 `DEPLOY_ROOT` 已固定为
-`/opt/onebeatbackend`。
-
-### 2.4 在开发电脑创建 Actions 专用 SSH 密钥
+### 2.5 在开发电脑创建 Actions 专用 SSH 密钥
 
 在 Mac 上执行：
 
@@ -292,7 +305,7 @@ ssh-keygen \
 Actions 无法交互输入密钥口令，所以这把专用部署密钥不设置 passphrase。不要把私钥上传到仓库、
 服务器应用目录或聊天记录中。
 
-### 2.5 通过 root 为 `onebeat` 安装公钥
+### 2.6 通过 root 为 `onebeat` 安装公钥
 
 仍在 Mac 上执行：
 
@@ -312,7 +325,7 @@ cat ~/.ssh/onebeat_github_actions.pub | ssh root@<Vultr-IP> '
 公钥必须属于 `onebeat:onebeat`；`.ssh` 权限必须是 `700`，`authorized_keys` 必须是
 `600`，否则 sshd 可能拒绝密钥。
 
-### 2.6 首次登录并验证 Docker 组
+### 2.7 首次登录并验证 Docker 组
 
 在 Mac 上执行：
 
@@ -372,24 +385,31 @@ Certbot 完成以下工作：
 `fullchain.pem` 包含服务器证书和中间证书链，可以公开；`privkey.pem` 是服务器私钥，必须严格
 保密，不能提交到 Git、放入 GitHub Secret、上传到镜像或发送给其他人。
 
-下面示例假定使用两个域名：
+本项目线网 API 域名（与 [store-system-design.md](store-system-design.md) 中华为 webhook 一致）：
 
-| 环境 | 示例域名 | 对外端口 |
+| 环境 | 域名 | 对外端口 |
 | --- | --- | --- |
-| 生产 | `api.example.com` | `443` |
-| 测试 | `api-test.example.com` | `8443` |
+| 测试（staging / `test` 镜像） | `onebeatapistaging.liluanxin.com` | `8443` |
+| 生产（`prod` 镜像） | `<prod-api-domain>`（与 AppGallery / 客户端 Base URL 一致） | `443` |
 
-执行命令前，必须把示例域名和邮箱替换成实际值。一个证书可以同时包含这两个域名；HTTPS
-证书校验域名而不是端口，所以测试域名使用 `8443` 不需要单独类型的证书。
+一个 Let’s Encrypt 证书可同时包含生产与测试两个 `-d` 域名；HTTPS 校验域名而非端口，测试环境
+使用 `8443` 不需要单独证书类型。Certbot 示例中的 `-d` 请替换为上表域名。
+
+在 DNS 尚未指向 OneBeat 服务器、暂时无法签发 Let’s Encrypt 时，**不要** 把自签名证书提交到
+Git；可在服务器本地生成临时证书写入 `/opt/onebeatbackend/certs/*` 仅用于调试
+（例如 `curl -k https://<Vultr-IP>:8443/healthz`），DNS 生效后必须换成 Certbot 证书。
 
 ### 4.2 配置域名和防火墙
 
 先在域名 DNS 管理页面创建记录：
 
 ```text
-api.example.com       A     <Vultr 公网 IPv4>
-api-test.example.com  A     <Vultr 公网 IPv4>
+onebeatapistaging.liluanxin.com   A     <OneBeat 服务器公网 IPv4>
+<prod-api-domain>                 A     <同一台 OneBeat 服务器 IPv4>
 ```
+
+API 的 A 记录应指向 **运行 Docker 与 `/opt/onebeatbackend` 的那台 Vultr**，与代理、Clash
+节点所在机器无关（分机拓扑见个人运维备忘，不在本文范围）。
 
 如果同时存在 `AAAA` 记录，它也必须指向该服务器可用的公网 IPv6；否则应先删除错误的
 `AAAA` 记录，避免 Let’s Encrypt 从错误地址进行验证。
@@ -397,11 +417,12 @@ api-test.example.com  A     <Vultr 公网 IPv4>
 在开发电脑上确认 DNS 已生效：
 
 ```bash
-dig +short api.example.com A
-dig +short api-test.example.com A
+dig +short onebeatapistaging.liluanxin.com A
+dig +short <prod-api-domain> A
 ```
 
-两个命令都应返回 Vultr 公网 IP。然后在 Vultr Firewall 中允许以下 TCP 入站端口：
+两个命令都应返回 OneBeat 服务器公网 IP。**Vultr 控制台 Firewall Group 与主机 UFW**（若启用）
+需同时放行下列端口（仅 §2.1 已列出的四类即可，不要对公网开放 5432）：
 
 | 端口 | 用途 |
 | --- | --- |
@@ -444,8 +465,8 @@ certbot --version
 
 ```bash
 # 这三个值必须替换为真实信息。
-PROD_DOMAIN="api.example.com"
-TEST_DOMAIN="api-test.example.com"
+PROD_DOMAIN="<prod-api-domain>"
+TEST_DOMAIN="onebeatapistaging.liluanxin.com"
 LE_EMAIL="admin@example.com"
 
 # --standalone：Certbot 临时启动 HTTP 服务监听 80 端口完成域名验证。
@@ -593,13 +614,13 @@ ls -l /opt/onebeatbackend/certs/{prod,test}/*.pem
 容器启动后，在开发电脑执行：
 
 ```bash
-curl --fail --show-error https://api.example.com/healthz
-curl --fail --show-error https://api-test.example.com:8443/healthz
+curl --fail --show-error https://<prod-api-domain>/healthz
+curl --fail --show-error https://onebeatapistaging.liluanxin.com:8443/healthz
 
 # 查看生产端实际返回证书的签发者、有效期和域名列表。
 openssl s_client \
-  -connect api.example.com:443 \
-  -servername api.example.com \
+  -connect <prod-api-domain>:443 \
+  -servername <prod-api-domain> \
   </dev/null 2>/dev/null |
   openssl x509 -noout -subject -issuer -dates -ext subjectAltName
 ```
@@ -687,9 +708,32 @@ ls -l .env.database .env.prod .env.test
 `onebeat_admin` 仅用于数据库初始化、维护和备份。API 只会收到对应环境 `.env` 中的
 `DATABASE_URL`，不会拿到管理员密码。
 
+### 5.2.1 上传运行时秘密（Actions 不会同步）
+
+GitHub Actions **只**部署镜像、Compose 与 SQL 迁移，**不会**复制 `deploy/secrets/`。在首次
+`push staging` / `master` 之前或秘密变更后，在开发电脑仓库根目录执行：
+
+```bash
+VULTR_HOST=<OneBeat-Vultr-IP> ./scripts/upload-vultr-secrets.sh
+```
+
+上传目标为 `/opt/onebeatbackend/secrets/`。Mac 本地 `test.env` / `prod.env` 中
+`REDEMPTION_CODES_PATH` 在 Vultr 上应为 `/run/secrets/redemption_codes.json`（见
+[deploy/secrets/README.md](../deploy/secrets/README.md)）。修改秘密后需重建 API 容器：
+
+```bash
+cd /opt/onebeatbackend
+docker compose -f docker-compose.test.yml up -d --force-recreate
+docker compose -f docker-compose.prod.yml up -d --force-recreate
+```
+
+日常 SSH 调试用 **个人** 密钥登录 `onebeat`；**不要** 把无 passphrase 的
+`onebeat_github_actions` 私钥交给 DBeaver 等 GUI 长期使用（§5.5）。换服务器后 DBeaver 的
+SSH 隧道 Host 改为新 IP，数据库密码以 **该机器** `/opt/onebeatbackend/.env.database` 为准。
+
 ### 5.3 首次启动数据库
 
-服务器密码文件准备好后，优先向 `staging` 推送并观察测试环境：
+服务器密码文件与 §5.2.1 秘密上传完成后，优先向 `staging` 推送并观察测试环境：
 
 ```bash
 git switch staging
@@ -749,11 +793,12 @@ docker exec onebeat-postgres \
   -c "SELECT version, dirty FROM schema_migrations;"
 ```
 
-预期能看到两个数据库，并且测试库迁移版本为 `2`、`dirty` 为 `false`。随后在开发电脑检查：
+预期能看到两个数据库；测试库 `schema_migrations.version` 应等于仓库 `migrations/` 中最新
+`*.up.sql` 编号（当前为 **4**），`dirty` 为 `false`。随后在开发电脑检查：
 
 ```bash
-curl --fail https://api-test.example.com:8443/healthz
-curl --fail https://api-test.example.com:8443/api/v1/database/test
+curl --fail https://onebeatapistaging.liluanxin.com:8443/healthz
+curl --fail https://onebeatapistaging.liluanxin.com:8443/api/v1/database/test
 ```
 
 数据库测试接口不会返回密码或主机地址，成功响应类似：
@@ -767,7 +812,7 @@ curl --fail https://api-test.example.com:8443/api/v1/database/test
     "database": "onebeat_test",
     "user": "onebeat_test",
     "serverTime": "2026-09-29T12:00:00Z",
-    "migrationVersion": 2,
+    "migrationVersion": 4,
     "migrationDirty": false
   }
 }
@@ -1015,6 +1060,8 @@ PostgreSQL 官方镜像只会在空数据目录运行 `/docker-entrypoint-initdb
 
 ## 7. 首次发布与验证
 
+确认 §2–§6 与 §5.2.1 已完成，再推送分支：
+
 ```bash
 git switch staging
 git push origin staging
@@ -1026,19 +1073,34 @@ git push origin master
 在 GitHub 仓库的 `Actions` 页面查看 `Build and deploy oneBeat`。发布后验证：
 
 ```bash
-curl https://api.example.com/api/v1/test
-curl https://api-test.example.com:8443/api/v1/test
-curl https://api.example.com/api/v1/database/test
-curl https://api-test.example.com:8443/api/v1/database/test
+curl --fail https://onebeatapistaging.liluanxin.com:8443/healthz
+curl --fail https://onebeatapistaging.liluanxin.com:8443/api/v1/database/test
+curl --fail https://<prod-api-domain>/healthz
+curl --fail https://<prod-api-domain>/api/v1/database/test
 
-ssh onebeat@<Vultr IP> 'docker ps'
-ssh onebeat@<Vultr IP> 'docker inspect --format "{{.State.Health.Status}}" onebeat-prod'
-ssh onebeat@<Vultr IP> 'docker inspect --format "{{.State.Health.Status}}" onebeat-test'
+ssh -i ~/.ssh/onebeat_github_actions onebeat@<OneBeat-Vultr-IP> 'docker ps'
+ssh -i ~/.ssh/onebeat_github_actions onebeat@<OneBeat-Vultr-IP> \
+  'docker inspect --format "{{.State.Health.Status}}" onebeat-test'
+ssh -i ~/.ssh/onebeat_github_actions onebeat@<OneBeat-Vultr-IP> \
+  'docker inspect --format "{{.State.Health.Status}}" onebeat-prod'
 ```
 
 响应中的 `environment` 应分别为 `prod` 与 `test`，`version` 应等于本次提交短 SHA。
 
-## 8. 回滚
+## 8. 更换 OneBeat 服务器（迁机）
+
+仅描述 **同一项目** 从一台 Vultr 迁到另一台（新 IP）。不涵盖数据库托管服务变更以外的架构调整。
+
+1. 在新机完成 §2（绿机用 §2.4，跳过 `/root/opt` 拷贝）、§3（若 GHCR 为 Public 可跳过 login）、§4 证书（**DNS 先指向新 IP** 再 Certbot）、§5.2 生成 **新的** `.env.database` / `.env.*`（密码与旧机无关）。
+2. Mac 执行 §5.2.1 `upload-vultr-secrets.sh`，目标 IP 改为新机。
+3. 更新 GitHub Actions `SSH_HOST` 与 `SSH_KNOWN_HOSTS`（`ssh-keyscan -H <新 IP>`）。
+4. `git push staging` 验证测试环境；生产按变更窗口 push `master`。
+5. **保留旧数据时**：在旧机 `pg_dump`（§5.8），维护窗口内停写，在新库结构已 migrate 后 `pg_restore`（见 PostgreSQL 文档；恢复前备份新机）。
+6. 验证域名、华为 webhook URL（仍为 `https://onebeatapistaging.liluanxin.com:8443/...` 等）与客户端 Base URL 后，在旧 OneBeat 服务器停止 Compose（先备份，勿误删未导出卷）。
+
+换 IP 后必须更新 `SSH_KNOWN_HOSTS`，否则 Actions 部署会失败。
+
+## 9. 回滚
 
 版本标签不会随滚动标签覆盖。回滚生产到 `prod-abc1234`：
 

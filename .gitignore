@@ -18,4 +18,5 @@ deploy/secrets/test/redemption_codes.json
 deploy/secrets/prod/redemption_codes.json
 !deploy/secrets/test/*.example
 !deploy/secrets/prod/*.example
+docs/operations-notes-local.md
 .DS_Store
