@@ -347,6 +347,17 @@ docker ps
 `docker` 组，以 root 再执行 `usermod -aG docker onebeat`，彻底退出 `onebeat` 会话后重新
 登录。`newgrp docker` 只能临时改变当前 shell，不适合作为 Actions 的长期配置。
 
+### 2.8 本机 SSH 别名（可选）
+
+上传运行时秘密：
+
+```bash
+./scripts/upload-vultr-secrets.sh backend-dog-onebeat
+```
+
+GitHub Actions 仍使用 Secrets 中的 **`SSH_HOST` = 该机器公网 IP**（与别名无关）；换主机后更新
+`SSH_HOST` 与 `SSH_KNOWN_HOSTS`（§6、§8）。
+
 ## 3. 让服务器拉取 GHCR 私有镜像
 
 在 GitHub `Settings > Developer settings > Personal access tokens > Tokens (classic)` 创建用于
@@ -714,7 +725,8 @@ GitHub Actions **只**部署镜像、Compose 与 SQL 迁移，**不会**复制 `
 `push staging` / `master` 之前或秘密变更后，在开发电脑仓库根目录执行：
 
 ```bash
-VULTR_HOST=<OneBeat-Vultr-IP> ./scripts/upload-vultr-secrets.sh
+./scripts/upload-vultr-secrets.sh backend-dog-onebeat
+# 或：VULTR_HOST=<OneBeat-Vultr-IP> ./scripts/upload-vultr-secrets.sh
 ```
 
 上传目标为 `/opt/onebeatbackend/secrets/`。Mac 本地 `test.env` / `prod.env` 中

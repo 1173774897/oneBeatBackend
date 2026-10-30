@@ -5,6 +5,7 @@
 # 用法（在仓库根目录）：
 #   VULTR_HOST=<IP> ./scripts/upload-vultr-secrets.sh
 #   ./scripts/upload-vultr-secrets.sh onebeat@<IP>
+#   ./scripts/upload-vultr-secrets.sh backend-dog-onebeat   # 依赖 ~/.ssh/config
 #
 # 可选环境变量：
 #   SSH_KEY   默认 ~/.ssh/onebeat_github_actions
