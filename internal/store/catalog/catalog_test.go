@@ -134,3 +134,23 @@ func TestNovemberLimitedFreeWindowBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// campaign.zero_width_20261001 stays open through the end of 2026-12-31, Beijing time.
+func TestZeroWidthCampaignEndsAfterDecember31(t *testing.T) {
+	beijing := time.FixedZone("CST", 8*60*60)
+	active := func(at time.Time) bool {
+		_, ok := FindActiveCampaignByCodeKey("code.zero_width_20261001", at)
+		return ok
+	}
+	if !active(time.Date(2026, time.November, 3, 12, 0, 0, 0, beijing)) ||
+		!active(time.Date(2026, time.December, 31, 23, 59, 59, 0, beijing)) {
+		t.Fatal("campaign must be open through 2026-12-31 Beijing time")
+	}
+	if active(time.Date(2027, time.January, 1, 0, 0, 0, 0, beijing)) {
+		t.Fatal("campaign must close at 2027-01-01 00:00 Beijing time")
+	}
+	campaign, _ := FindCampaignByCodeKey("code.zero_width_20261001")
+	if campaign.Rule != RedemptionRuleOncePerAccount || campaign.PerAccountLimit != 1 {
+		t.Fatalf("extension must keep the once-per-account rule: %+v", campaign)
+	}
+}

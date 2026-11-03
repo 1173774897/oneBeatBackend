@@ -32,10 +32,11 @@ type LimitedFreeWindow struct {
 
 var redemptionCampaigns = []RedemptionCampaign{
 	{
-		CampaignKey:        "campaign.zero_width_20261001",
-		CodeKeys:           []string{"code.zero_width_20261001"},
-		StartsAt:           time.Date(2026, time.September, 30, 16, 0, 0, 0, time.UTC),
-		EndsAt:             time.Date(2026, time.October, 10, 16, 0, 0, 0, time.UTC),
+		CampaignKey: "campaign.zero_width_20261001",
+		CodeKeys:    []string{"code.zero_width_20261001"},
+		StartsAt:    time.Date(2026, time.September, 30, 16, 0, 0, 0, time.UTC),
+		// Extended 2026-11-03: open through 2026-12-31 24:00 Beijing time (UTC+8), end exclusive.
+		EndsAt:             time.Date(2026, time.December, 31, 16, 0, 0, 0, time.UTC),
 		Rule:               RedemptionRuleOncePerAccount,
 		PerAccountLimit:    1,
 		GrantCalendarMonth: 1,

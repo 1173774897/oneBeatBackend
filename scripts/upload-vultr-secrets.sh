@@ -1,5 +1,5 @@
 #!/bin/sh
-# 从 Mac 上传 deploy/secrets/* 到 Vultr（test + prod，含 IAP）。
+# 从 Mac 上传 deploy/secrets/* 到 Vultr（test + prod）。
 # GitHub Actions 不会同步这些文件，需手工执行。
 #
 # 用法（在仓库根目录）：
