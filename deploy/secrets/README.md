@@ -1,5 +1,11 @@
 # 收藏小铺运行时秘密
 
+> **2026-11-03 起不再需要华为 IAP 服务端密钥**（`HUAWEI_IAP_*`、`PURCHASE_BINDING_SECRET`、
+> `PURCHASE_TOKEN_ENCRYPTION_KEY`）：付费购买改为客户端直接与华为完成校验和确认，服务器（香港）不再
+> 接收购买数据，也不再接收华为 IAP 关键事件通知。已有 `test.env` / `prod.env` 里的这些键可以删除；
+> 新代码不再读取。下文「Harmony IAP 服务端密钥」「AGC 关键事件通知」两节仅作历史参考，并需在 AGC
+> 关闭 IAP 服务端通知地址。
+
 与 [store-system-design.md §10.2](../../docs/store-system-design.md) 一致。这些值**不得**进入 Git、
 GitHub Actions Secrets 或 Docker 镜像。数据库连接仍使用上一级的 `deploy/.env.test` /
 `deploy/.env.prod`（仅 `DATABASE_URL`）。
@@ -34,7 +40,9 @@ GitHub Actions Secrets 或 Docker 镜像。数据库连接仍使用上一级的 
 
 `HUAWEI_IAP_PRIVATE_KEY` 为单行 PEM，换行写为 `\n`；Go 实现读取后会还原为真实换行。
 
-### Harmony IAP 服务端密钥三项怎么填
+### Harmony IAP 服务端密钥三项怎么填（已弃用）
+
+> **已弃用（2026-11-03）**：服务器不再调用华为 IAP 接口，不需要填写本节的三项。
 
 查单 / 确认发货走 [IAP 服务端 JWT](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/iap-jwt-description)（`Authorization: Bearer <JWT>`，`aud=iap-v1`，**ES256**，带请求体 `digest`）。须从 **AppGallery Connect → 应用 → 应用内支付 → 配置密钥** 创建并下载**同一套**密钥（多为 **EC P-256**）：
 
@@ -74,7 +82,9 @@ openssl pkey -in /path/to/iap-server-key.pem -text -noout | head -n 3
 `deploy/secrets/test/redemption_codes.json` 的路径改成容器路径。生产 `prod.env` 须单独填写正式
 华为凭据，`HUAWEI_IAP_ENVIRONMENT=production`。
 
-### Mac → Vultr 命令清单（test + prod IAP）
+### Mac → Vultr 命令清单（test + prod）
+
+> 其中 `HUAWEI_IAP_*` 相关步骤已弃用，跳过即可。
 
 **上传前（Mac，仓库根目录）**
 
@@ -132,7 +142,9 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate
 
 Actions 只部署镜像与迁移，**不会**复制 `secrets/`；改秘密后只需 scp + 上述 recreate，不必重新 push。
 
-## AGC 关键事件通知（退款 / 撤销 webhook）
+## AGC 关键事件通知（退款 / 撤销 webhook）（已弃用）
+
+> **已弃用（2026-11-03）**：通知接口已删除（返回 404）。请在 AGC **关闭**这个通知地址，不要再配置。
 
 测试环境在 **AppGallery Connect → 盈利 → 应用内购买 → 事件通知** 配置：
 

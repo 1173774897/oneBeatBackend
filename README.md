@@ -48,13 +48,13 @@ curl -k https://localhost:8443/healthz
 
 ```text
 POST /api/v1/auth/huawei
-POST /api/v1/iap/purchases/verify
-POST /api/v1/iap/purchases/restore
+POST /api/v1/store/redemptions
+POST /api/v1/account/deletion
 ```
 
-这三项依赖真实华为 Account/IAP 凭据，不能用探活 curl 伪造成功。启动前尤其要确认
-`HUAWEI_IAP_PRIVATE_KEY` 来自 AGC「应用内支付 → 配置密钥」且为 EC P-256 私钥；完整字段映射和检查命令见
-[运行时秘密说明](deploy/secrets/README.md#harmony-iap-服务端密钥三项怎么填)。
+这几项依赖真实华为账号凭据，不能用探活 curl 伪造成功。付费购买（华为 IAP）自 2026-11-03 起
+完全在客户端完成校验与确认，本服务不再提供验单、恢复购买和华为通知接口，也不再需要 IAP 密钥
+（服务器在香港，购买记录不应出境，见 `docs/store-system-design.md` §15）。
 
 测试接口返回示例：
 
@@ -83,16 +83,9 @@ POST /api/v1/iap/purchases/restore
 | `APP_ENV` | `development` | 运行环境标识 |
 | `APP_VERSION` | `dev` | 构建版本，CI 中为提交短 SHA |
 | `DATABASE_URL` | 无 | PostgreSQL 连接 URL，必须提供 |
-| `IAP_RECONCILIATION_TIMEZONE` | `Asia/Shanghai` | 生产订单对账自然日时区 |
-| `IAP_RECONCILIATION_OBSERVE_ONLY` | `1` | 生产首次上线默认只观察交易，不改业务表 |
-| `IAP_BACKFILL_ENABLED` | `0` | 仅生产 worker 使用；`1` 时执行历史回补 |
-| `IAP_BACKFILL_DAYS` | `180` | 历史回补天数，上限 180 |
 
-收藏小铺的 Account/IAP/会话秘密见 `deploy/secrets/test.env.example` 与
-[deploy/secrets/README.md](deploy/secrets/README.md)。中国区 IAP Order/Subscription 根地址固定在代码中，
-不通过环境变量配置；站点选择以华为官方
-[IAP 公共说明](https://developer.huawei.com/consumer/cn/doc/HMSCore-References-V5/api-common-statement-0000001050986127-V5)
-为准。
+收藏小铺的 Account/会话/口令秘密见 `deploy/secrets/test.env.example` 与
+[deploy/secrets/README.md](deploy/secrets/README.md)。服务器不调用华为 IAP 接口，不需要 IAP 配置。
 
 若只是排查本机网络，可临时使用明文模式：
 
@@ -133,5 +126,8 @@ PostgreSQL 容器中。
 
 ## 设计文档
 
-- [收藏小铺系统设计](docs/store-system-design.md)：前后端分工、Huawei IAP/Account Kit
-  接入边界、权益规则、接口、数据库表和私密配置方案。
+- [收藏小铺：端侧购买与服务端兑换技术设计](docs/store-device-iap-technical-design.md)：**现行方案**。付费购买在客户端
+  直接与华为完成，服务器只负责华为账号登录、口令兑换和账号注销。
+- [口令月卡与角色限免技术设计](docs/redemption-free-access-technical-design.md)：兑换和限免细节（华为相关部分已弃用）。
+- [收藏小铺系统设计](docs/store-system-design.md)：**已弃用**，仅商品目录、权益模型、自然月等部分仍可参考。
+- [IAP 订单与对账方案调整](docs/store-system-design-tweak.md)：**已弃用**，仅作历史记录。

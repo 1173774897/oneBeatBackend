@@ -13,6 +13,7 @@ import (
 	"onebeat/store-api/internal/auth"
 	"onebeat/store-api/internal/database"
 	"onebeat/store-api/internal/store/catalog"
+	"onebeat/store-api/internal/store/repository"
 	"onebeat/store-api/internal/store/security"
 	storeservice "onebeat/store-api/internal/store/service"
 )
@@ -57,6 +58,13 @@ type huaweiIdentityAuthenticator interface {
 
 type userRepository interface {
 	UpsertUser(context.Context, []byte, time.Time) (string, error)
+	UserStatus(context.Context, string) (string, error)
+}
+
+// accountDeleter is the account-deletion slice of the store service, kept as an
+// interface so the HTTP contract can be tested without a database.
+type accountDeleter interface {
+	DeleteAccount(context.Context, string) (time.Time, error)
 }
 
 type StoreServices struct {
@@ -64,6 +72,7 @@ type StoreServices struct {
 	UserRepository              userRepository
 	SessionManager              *auth.SessionManager
 	StoreService                *storeservice.Service
+	AccountDeleter              accountDeleter
 	AccountUnionIDPepper        []byte
 }
 
@@ -87,9 +96,9 @@ func NewHandlerWithStoreServices(
 	mux.HandleFunc("/api/v1/store/bootstrap", getOnly(storeBootstrapHandler(services)))
 	mux.HandleFunc("/api/v1/store/redemptions", postOnly(redeemHandler(logger, services, newRedemptionLimiter())))
 	mux.HandleFunc("/api/v1/auth/huawei", postOnly(huaweiAuthHandler(logger, services)))
-	mux.HandleFunc("/api/v1/iap/purchases/verify", postOnly(verifyPurchaseHandler(logger, services)))
-	mux.HandleFunc("/api/v1/iap/purchases/restore", postOnly(restorePurchasesHandler(logger, services)))
-	mux.HandleFunc("/api/v1/webhooks/huawei/iap", postOnly(huaweiIAPWebhookHandler(logger, environment, services)))
+	// No purchase/IAP routes: paid purchases are resolved on the device and
+	// purchase data must not reach this server (cross-border, 2026-11-03).
+	mux.HandleFunc("/api/v1/account/deletion", postOnly(accountDeletionHandler(logger, services)))
 	mux.HandleFunc("/", notFoundHandler)
 	return requestMiddleware(logger, mux)
 }
@@ -142,12 +151,8 @@ func redemptionErrorResponse(err error) (int, int, string) {
 		return http.StatusConflict, 40923, "redemption has already been used by this account"
 	case errors.Is(err, storeservice.ErrRedemptionGlobalLimit):
 		return http.StatusConflict, 40924, "redemption campaign quota is exhausted"
-	case errors.Is(err, storeservice.ErrRedemptionIAPActive):
-		return http.StatusConflict, 40925, "active Huawei subscription prevents redemption"
 	case errors.Is(err, storeservice.ErrRedemptionIdempotencyConflict):
 		return http.StatusConflict, 40926, "idempotency key belongs to another redemption"
-	case errors.Is(err, storeservice.ErrHuaweiUnavailable):
-		return http.StatusServiceUnavailable, 50321, "Huawei IAP is temporarily unavailable"
 	default:
 		return http.StatusServiceUnavailable, 50301, "store data unavailable"
 	}
@@ -170,6 +175,13 @@ func storeBootstrapHandler(services *StoreServices) http.HandlerFunc {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
 		defer cancel()
+		if active, err := userIsActive(ctx, services, userID); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50301, Message: "store data unavailable"})
+			return
+		} else if !active {
+			writeJSON(w, http.StatusUnauthorized, responseEnvelope{Code: 40101, Message: "invalid OneBeat session"})
+			return
+		}
 		bootstrap, err := services.StoreService.Bootstrap(ctx, userID)
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50301, Message: "store data unavailable"})
@@ -238,127 +250,58 @@ func logHuaweiAuthFailure(logger *slog.Logger, err error) {
 	logger.Error("huawei identity verification failed", "reason", err.Error())
 }
 
-func verifyPurchaseHandler(logger *slog.Logger, services *StoreServices) http.HandlerFunc {
+// accountDeletionHandler deletes the caller's Store account. It accepts a
+// session of an already deleted account and answers with the original time, so
+// a client that lost the first response can retry; every other route rejects
+// such a session (requireUser).
+func accountDeletionHandler(logger *slog.Logger, services *StoreServices) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := requireUser(w, r, services)
-		if !ok {
-			return
-		}
-		var input storeservice.VerifyInput
-		if err := decodeJSON(r, &input); err != nil {
-			writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid request"})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
-		defer cancel()
-		bootstrap, err := services.StoreService.VerifyPurchase(ctx, userID, input)
-		if err != nil {
-			logPurchaseOperationFailure(logger, "verify", input.ProductID, len(input.PurchaseData), err)
-		}
-		writeStoreResult(w, bootstrap, err)
-	}
-}
-
-func huaweiIAPWebhookHandler(logger *slog.Logger, environment string, services *StoreServices) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if services == nil || services.StoreService == nil {
+		if services == nil || services.SessionManager == nil || services.AccountDeleter == nil {
 			writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50301, Message: "store service is not configured"})
 			return
 		}
-		rawBody, err := io.ReadAll(io.LimitReader(r.Body, maximumJSONBody))
-		if err != nil || len(rawBody) == 0 {
-			writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid request"})
+		userID, present, err := optionalUser(r, services.SessionManager)
+		if err != nil || !present {
+			writeJSON(w, http.StatusUnauthorized, responseEnvelope{Code: 40101, Message: "valid OneBeat login is required"})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
 		defer cancel()
-		err = services.StoreService.HandleHuaweiIAPWebhook(ctx, environment, rawBody)
+		deletedAt, err := services.AccountDeleter.DeleteAccount(ctx, userID)
+		status, code, message := http.StatusOK, 0, "ok"
+		switch {
+		case err == nil:
+		case errors.Is(err, repository.ErrUserNotFound):
+			status, code, message = http.StatusUnauthorized, 40101, "valid OneBeat login is required"
+		default:
+			status, code, message = http.StatusServiceUnavailable, 50301, "store data unavailable"
+		}
+		if logger != nil {
+			logger.Info("store account deletion completed", "userId", userID, "resultCode", code)
+		}
 		if err != nil {
-			switch {
-			case errors.Is(err, storeservice.ErrWebhookInvalidSignature), errors.Is(err, storeservice.ErrWebhookInvalidPayload):
-				writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid Huawei notification"})
-			case errors.Is(err, storeservice.ErrWebhookEnvironment):
-				writeJSON(w, http.StatusUnprocessableEntity, responseEnvelope{Code: 42231, Message: "notification environment does not match server"})
-			case errors.Is(err, storeservice.ErrWebhookUnknownOrder):
-				// Acknowledge so Huawei does not retry forever; client restore can link the order later.
-				if logger != nil {
-					logger.Warn("huawei iap webhook order not linked", "reason", err.Error())
-				}
-				writeJSON(w, http.StatusOK, responseEnvelope{Code: 0, Message: "ok"})
-			default:
-				if logger != nil {
-					logger.Warn("huawei iap webhook processing failed", "reason", err.Error())
-				}
-				writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50321, Message: "notification processing failed"})
-			}
+			writeJSON(w, status, responseEnvelope{Code: code, Message: message})
 			return
 		}
-		writeJSON(w, http.StatusOK, responseEnvelope{Code: 0, Message: "ok"})
+		writeJSON(w, status, responseEnvelope{Code: code, Message: message,
+			Data: map[string]time.Time{"deletedAt": deletedAt}})
 	}
 }
 
-func restorePurchasesHandler(logger *slog.Logger, services *StoreServices) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := requireUser(w, r, services)
-		if !ok {
-			return
-		}
-		var input struct {
-			Purchases []storeservice.VerifyInput `json:"purchases"`
-		}
-		if err := decodeJSON(r, &input); err != nil {
-			writeJSON(w, http.StatusBadRequest, responseEnvelope{Code: 40001, Message: "invalid request"})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), storeRequestTimeout)
-		defer cancel()
-		bootstrap, err := services.StoreService.RestorePurchases(ctx, userID, input.Purchases)
-		if err != nil && len(input.Purchases) > 0 {
-			logPurchaseOperationFailure(logger, "restore", input.Purchases[0].ProductID, len(input.Purchases[0].PurchaseData), err)
-		}
-		writeStoreResult(w, bootstrap, err)
+// userIsActive rejects sessions of deleted or disabled accounts. Sessions are
+// stateless JWTs that stay valid until expiry, so this is the revocation point.
+func userIsActive(ctx context.Context, services *StoreServices, userID string) (bool, error) {
+	if services.UserRepository == nil {
+		return false, errors.New("user repository is not configured")
 	}
-}
-
-func logPurchaseOperationFailure(logger *slog.Logger, operation string, productID string, purchaseDataLen int, err error) {
-	if logger == nil || err == nil {
-		return
-	}
-	logger.Warn("iap purchase operation failed",
-		"operation", operation,
-		"productId", productID,
-		"purchaseDataLen", purchaseDataLen,
-		"reason", err.Error(),
-	)
-}
-
-func writeStoreResult(w http.ResponseWriter, bootstrap catalog.Bootstrap, err error) {
-	if errors.Is(err, storeservice.ErrInvalidPurchase) {
-		message := "purchase verification failed"
-		code := 42231
-		if err != nil {
-			detail := err.Error()
-			switch {
-			case strings.Contains(detail, "account binding"):
-				message = "purchase account binding does not match"
-				code = 42232
-			case strings.Contains(detail, "environment does not match"):
-				message = "purchase environment does not match server"
-				code = 42231
-			}
-		}
-		writeJSON(w, http.StatusUnprocessableEntity, responseEnvelope{Code: code, Message: message})
-		return
-	}
-	if errors.Is(err, storeservice.ErrHuaweiUnavailable) {
-		writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50321, Message: "Huawei IAP is temporarily unavailable"})
-		return
+	status, err := services.UserRepository.UserStatus(ctx, userID)
+	if errors.Is(err, repository.ErrUserNotFound) {
+		return false, nil
 	}
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, responseEnvelope{Code: 50002, Message: "store operation failed"})
-		return
+		return false, err
 	}
-	writeJSON(w, http.StatusOK, responseEnvelope{Code: 0, Message: "ok", Data: bootstrap})
+	return status == repository.UserStatusActive, nil
 }
 
 func requireUser(w http.ResponseWriter, r *http.Request, services *StoreServices) (string, bool) {
@@ -368,6 +311,17 @@ func requireUser(w http.ResponseWriter, r *http.Request, services *StoreServices
 	}
 	userID, present, err := optionalUser(r, services.SessionManager)
 	if err != nil || !present {
+		writeJSON(w, http.StatusUnauthorized, responseEnvelope{Code: 40101, Message: "valid OneBeat login is required"})
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), databaseRequestTimeout)
+	defer cancel()
+	active, err := userIsActive(ctx, services, userID)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, responseEnvelope{Code: 50301, Message: "store data unavailable"})
+		return "", false
+	}
+	if !active {
 		writeJSON(w, http.StatusUnauthorized, responseEnvelope{Code: 40101, Message: "valid OneBeat login is required"})
 		return "", false
 	}

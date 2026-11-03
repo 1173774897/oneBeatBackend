@@ -194,6 +194,10 @@ func (stubUserRepository) UpsertUser(context.Context, []byte, time.Time) (string
 	return "", errors.New("not used")
 }
 
+func (stubUserRepository) UserStatus(context.Context, string) (string, error) {
+	return "", errors.New("not used")
+}
+
 func TestHuaweiAuthLogsHuaweiErrorCodesOnly(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))

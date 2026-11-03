@@ -1,5 +1,7 @@
 # GitHub Actions 部署
 
+> 2026-11-03：服务器不再处理华为 IAP。文中标有「已弃用」的内容（IAP 对账 worker、华为 IAP 通知、IAP 密钥、IAP 表重建）不再适用，见 [《收藏小铺：端侧购买与服务端兑换技术设计》](store-device-iap-technical-design.md) §6。
+
 ## 发布路径
 
 - `master`：构建 `prod` 与 `prod-<短 SHA>` 镜像，部署到 Vultr 的 `443`。
@@ -15,7 +17,7 @@
 ## 本地开发环境
 
 Vultr 已按本文档后续章节跑通后，日常改代码**不必**在本地复刻整台机器（双 API 容器、Certbot、
-公网 `443`、GHCR 拉镜像、华为 webhook 公网回调）。本地目标是：与线网共用 **同一套 SQL 迁移**
+公网 `443`、GHCR 拉镜像）。本地目标是：与线网共用 **同一套 SQL 迁移**
 和 **`onebeat_test` 逻辑库**，在宿主机用 HTTPS API 做快速验证，再推 `staging` 让 Actions 在
 Vultr 上跑 **test 镜像** 做与线上一致的最后一跳。
 
@@ -47,7 +49,7 @@ Vultr 上跑 **test 镜像** 做与线上一致的最后一跳。
 | `deploy/.env.database` | 否 | Postgres 管理员与 `onebeat_prod` / `onebeat_test` 建库密码 |
 | `deploy/.env.test` | 否 | 迁移容器用 `DATABASE_URL`（主机名 `onebeat-postgres`） |
 | `deploy/.env.local` | 否 | 宿主机 `go run` 用 `DATABASE_URL`（`127.0.0.1`） |
-| `deploy/secrets/test.env` | 否 | OneBeat pepper、JWT、华为 Account/IAP（含 `\n` 转义 PEM） |
+| `deploy/secrets/test.env` | 否 | OneBeat pepper、JWT、华为 Account（IAP 密钥已弃用，不再需要） |
 | `deploy/secrets/test/redemption_codes.json` | 否 | 口令 HMAC 摘要（有活动时再填） |
 
 `bootstrap-local-env.sh` 只生成数据库相关三个 env；`init-local-secrets.sh` 从 example 复制
@@ -80,7 +82,7 @@ chmod +x scripts/bootstrap-local-env.sh \
 ./scripts/init-local-secrets.sh
 ```
 
-然后编辑 **`deploy/secrets/test.env`**：补全仍为 `REPLACE_ME` 的项，以及华为 Account/IAP
+然后编辑 **`deploy/secrets/test.env`**：补全仍为 `REPLACE_ME` 的项，以及华为 Account
 段（说明见文件内 `#` 注释）。暂不做口令兑换可保持 `redemption_codes.json` 为示例内容。
 
 若已手工维护过 `deploy/.env.*`，勿重复运行 `bootstrap-local-env.sh`；只要
@@ -396,7 +398,7 @@ Certbot 完成以下工作：
 `fullchain.pem` 包含服务器证书和中间证书链，可以公开；`privkey.pem` 是服务器私钥，必须严格
 保密，不能提交到 Git、放入 GitHub Secret、上传到镜像或发送给其他人。
 
-本项目线网 API 域名（与 [store-system-design.md](store-system-design.md) 中华为 webhook 一致）：
+本项目线网 API 域名：
 
 | 环境 | 域名 | 对外端口 |
 | --- | --- | --- |
@@ -897,46 +899,39 @@ Password: <TEST_PASSWORD>
 4. Actions 只自动执行 `up`，绝不自动执行 `down` 或 `force`。
 5. 生产迁移前先备份，并先在 `onebeat_test` 执行同一组迁移。
 
-#### 本次 IAP 表重构的一次性例外
+#### 上线前整理迁移的一次性例外（2026-11-03）
 
-项目尚未上线且旧测试数据明确不保留，因此当前分支直接重写了
-`000002_create_store_domain.*.sql`。如果服务器上的 `onebeat_test` 或 `onebeat_prod` 已执行过旧版
-`000002`，普通 `migrate up` 会看到版本仍是 `2` 并跳过，**不会**自动换成新表结构。首次部署本次
-重构时必须逐个环境重建逻辑库；完成后 `000002` 恢复为不可修改的已发布迁移。
+项目上线前，迁移整理成了最终的干净版本，只剩 `000001`、`000002`。开发阶段的旧迁移已合并进 `000002` 或直接删除，包括：早期 IAP 表、后来又删除的表和索引、注销字段。这样生产首次部署执行的迁移里，不会出现"先建再删"的对象。
 
-先在测试环境执行。确认没有需要保留的数据并完成备份后，在服务器停止测试 API：
+- **生产（`onebeat_prod`）**：从未执行过迁移，不需要任何处理。首次推送 `master` 时，Actions 从版本 0 执行到版本 2。
+- **测试（`onebeat_test`）**：已执行过旧版 `000001`～`000004`，必须一次性重建。旧版本号与新文件不对应，普通 `migrate up` 无法升级。测试数据不保留。
+
+服务器上的迁移目录由 Actions 每次部署时整体替换（先上传到 `migrations.next`，再替换 `migrations`）。所以旧的 `000003`、`000004` 文件会在下一次部署时消失，不会被生产误执行。
+
+在服务器上重建测试库。账号名都从数据库容器的环境变量读取；重建时直接重跑挂载在容器里的建库脚本，它会跳过已存在的 `onebeat_prod` 和账号，只重建 `onebeat_test`，并恢复连接权限：
 
 ```bash
 cd /opt/onebeatbackend
+
+# 备份（可选，测试数据不保留）
+install -d -m 0700 backups
+docker exec onebeat-postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d onebeat_test -Fc' \
+  >"backups/onebeat_test_before_reset_$(date +%Y%m%d_%H%M%S).dump"
+
+# 停掉测试 API
 docker compose -f docker-compose.test.yml down
 
-docker exec onebeat-postgres \
-  psql -U onebeat_admin -d postgres \
-  -c "DROP DATABASE onebeat_test WITH (FORCE);"
-
-docker exec onebeat-postgres \
-  psql -U onebeat_admin -d postgres \
-  -c "CREATE DATABASE onebeat_test OWNER onebeat_test;"
+# 删除并重建测试库
+docker exec onebeat-postgres sh -c \
+  'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "DROP DATABASE onebeat_test WITH (FORCE)"'
+docker exec onebeat-postgres sh /docker-entrypoint-initdb.d/01-create-environment-databases.sh
 ```
 
-随后推送 `staging`。Actions 会上传当前迁移、从版本 0 执行到版本 2，再启动测试 API。按 5.4 验证
-迁移版本、接口和沙盒购买/退款流程。测试通过后，生产环境采用同样的受控窗口：
+随后推送 `staging`。Actions 会替换迁移目录，从版本 0 执行到版本 2，再启动测试 API。用下面的命令确认版本为 `2`。
 
-```bash
-cd /opt/onebeatbackend
-docker compose -f docker-compose.prod.yml down
+本地开发库（`deploy/docker-compose.database.yml` 启动的 `onebeat_test`）如果执行过旧迁移，也按同样方式重建。
 
-docker exec onebeat-postgres \
-  psql -U onebeat_admin -d postgres \
-  -c "DROP DATABASE onebeat_prod WITH (FORCE);"
-
-docker exec onebeat-postgres \
-  psql -U onebeat_admin -d postgres \
-  -c "CREATE DATABASE onebeat_prod OWNER onebeat_prod;"
-```
-
-再推送 `master` 让 Actions 迁移并启动生产 API 与对账 worker。以上命令会永久删除目标逻辑库，
-只适用于本次“未上线、无需保留旧数据”的明确前提；以后禁止用重建数据库代替正常增量迁移。
+以上命令会永久删除测试逻辑库，只适用于这次"未上线、无需保留旧数据"的明确前提。之后 `000001`、`000002` 都是已发布迁移，不能再改；表结构变更只能新增下一个版本。
 
 手工查看测试库版本：
 
@@ -966,6 +961,8 @@ docker compose \
 golang-migrate 的镜像固定为 `migrate/migrate:v4.19.1`，避免 `latest` 更新造成不可预测变化。
 
 ### 5.7 生产 IAP 对账 worker
+
+> **已弃用（2026-11-03）**：对账 worker 和 `iap_reconciliation_checkpoints` 表已删除，`docker-compose.prod.yml` 不再启动 `iap-reconciler`。已经部署过的服务器执行 `docker rm -f onebeat-iap-reconciler` 删除残留容器。本节只作历史记录。
 
 生产 Compose 会随 API 一起启动 `onebeat-iap-reconciler`。它使用相同镜像和生产数据库，但入口为
 `/app/onebeat-reconciler`，不会监听公网端口。测试/沙盒环境不启动该 worker，因为 Huawei 的
@@ -1045,7 +1042,7 @@ docker exec onebeat-postgres \
 ls -lh /opt/onebeatbackend/backups
 ```
 
-备份文件仍在同一台 Vultr 上，不足以应对整机或磁盘故障。商店正式存放订单等关键数据前，应把
+备份文件仍在同一台 Vultr 上，不足以应对整机或磁盘故障。商店正式存放兑换记录等关键数据前，应把
 加密备份定期同步到独立对象存储，并定期在临时数据库执行恢复演练。
 
 PostgreSQL 官方镜像只会在空数据目录运行 `/docker-entrypoint-initdb.d`，相关行为见
@@ -1108,7 +1105,7 @@ ssh -i ~/.ssh/onebeat_github_actions onebeat@<OneBeat-Vultr-IP> \
 3. 更新 GitHub Actions `SSH_HOST` 与 `SSH_KNOWN_HOSTS`（`ssh-keyscan -H <新 IP>`）。
 4. `git push staging` 验证测试环境；生产按变更窗口 push `master`。
 5. **保留旧数据时**：在旧机 `pg_dump`（§5.8），维护窗口内停写，在新库结构已 migrate 后 `pg_restore`（见 PostgreSQL 文档；恢复前备份新机）。
-6. 验证域名、华为 webhook URL（仍为 `https://onebeatapistaging.liluanxin.com:8443/...` 等）与客户端 Base URL 后，在旧 OneBeat 服务器停止 Compose（先备份，勿误删未导出卷）。
+6. 验证域名与客户端 Base URL 后，在旧 OneBeat 服务器停止 Compose（先备份，勿误删未导出卷）。
 
 换 IP 后必须更新 `SSH_KNOWN_HOSTS`，否则 Actions 部署会失败。
 

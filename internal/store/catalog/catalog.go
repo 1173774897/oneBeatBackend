@@ -75,7 +75,6 @@ type RedemptionSnapshot struct {
 type Bootstrap struct {
 	ServerTime       time.Time          `json:"serverTime"`
 	ConfigVersion    string             `json:"configVersion"`
-	DeveloperPayload string             `json:"developerPayload,omitempty"`
 	Pass             PassSnapshot       `json:"pass"`
 	Items            []ItemSnapshot     `json:"items"`
 	Redemption       RedemptionSnapshot `json:"redemption"`
@@ -137,7 +136,6 @@ func AnonymousBootstrap(now time.Time) Bootstrap {
 // AuthenticatedBootstrap overlays verified account grants on the public catalog.
 func AuthenticatedBootstrap(
 	now time.Time,
-	developerPayload string,
 	grants map[string]Access,
 	pass PassSnapshot,
 	shareReward ShareRewardSnapshot,
@@ -146,7 +144,6 @@ func AuthenticatedBootstrap(
 	return Bootstrap{
 		ServerTime:       now.UTC(),
 		ConfigVersion:    ConfigVersion,
-		DeveloperPayload: developerPayload,
 		Pass:             pass,
 		Items:            itemSnapshots(now, grants, pass),
 		Redemption:       RedemptionSnapshot{Available: len(ActiveRedemptionCampaigns(now)) > 0},

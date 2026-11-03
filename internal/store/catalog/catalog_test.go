@@ -57,7 +57,7 @@ func TestTodayUnlocksLilRollForAnonymousUsers(t *testing.T) {
 func TestRedemptionPassBlocksIAPPurchase(t *testing.T) {
 	now := time.Date(2026, time.October, 1, 8, 0, 0, 0, time.UTC)
 	expiresAt := now.AddDate(0, 1, 0)
-	bootstrap := AuthenticatedBootstrap(now, "binding", nil, PassSnapshot{
+	bootstrap := AuthenticatedBootstrap(now, nil, PassSnapshot{
 		Active: true, Source: AccessRedemption, ExpiresAt: &expiresAt,
 	}, ShareRewardSnapshot{})
 	if bootstrap.Pass.IAPPurchaseAllowed || bootstrap.Pass.IAPPurchaseBlockedReason != IAPPurchaseBlockedGiftActive {
@@ -68,7 +68,7 @@ func TestRedemptionPassBlocksIAPPurchase(t *testing.T) {
 func TestPermanentPurchaseReasonWinsOverActivePass(t *testing.T) {
 	now := time.Date(2026, time.October, 2, 8, 0, 0, 0, time.UTC)
 	expiresAt := now.AddDate(0, 1, 0)
-	bootstrap := AuthenticatedBootstrap(now, "binding", map[string]Access{
+	bootstrap := AuthenticatedBootstrap(now, map[string]Access{
 		"character.cloud": {Allowed: true, Reason: AccessIAPPurchase},
 	}, PassSnapshot{Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt}, ShareRewardSnapshot{})
 
@@ -87,7 +87,7 @@ func TestPermanentPurchaseReasonWinsOverActivePass(t *testing.T) {
 func TestActivePassUnlocksEveryPaidCharacterAndScene(t *testing.T) {
 	now := time.Date(2026, time.October, 3, 8, 0, 0, 0, time.UTC)
 	expiresAt := now.AddDate(0, 1, 0)
-	bootstrap := AuthenticatedBootstrap(now, "binding", nil, PassSnapshot{
+	bootstrap := AuthenticatedBootstrap(now, nil, PassSnapshot{
 		Active: true, Source: AccessIAPPass, ExpiresAt: &expiresAt,
 	}, ShareRewardSnapshot{})
 

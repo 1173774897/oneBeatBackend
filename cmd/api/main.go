@@ -14,7 +14,6 @@ import (
 	"onebeat/store-api/internal/config"
 	"onebeat/store-api/internal/database"
 	"onebeat/store-api/internal/httpapi"
-	huawei_iap "onebeat/store-api/internal/huawei/iap"
 	"onebeat/store-api/internal/store/catalog"
 	"onebeat/store-api/internal/store/redemption"
 	"onebeat/store-api/internal/store/repository"
@@ -72,32 +71,15 @@ func main() {
 		storeConfig.HuaweiAccountClientSecret,
 		huaweiIdentityVerifier,
 	)
-	huaweiIAPClient, err := huawei_iap.NewClient(huaweiHTTPClient, huawei_iap.Config{
-		PrivateKeyPEM: storeConfig.HuaweiIAPPrivateKey,
-		KeyID:         storeConfig.HuaweiIAPKeyID,
-		IssuerID:      storeConfig.HuaweiIAPIssuerID,
-		Environment:   storeConfig.HuaweiIAPEnvironment,
-		ApplicationID: config.HuaweiApplicationID,
-		PackageName:   config.HuaweiPackageName,
-	})
-	if err != nil {
-		logger.Error("Huawei IAP configuration is invalid", "error", err)
-		os.Exit(1)
-	}
 	storeRepository := repository.New(store.Pool())
-	storeService := storeservice.New(
-		storeRepository,
-		huaweiIAPClient,
-		storeConfig.PurchaseBindingSecret,
-		storeConfig.PurchaseTokenEncryptionKey,
-		storeConfig.Environment,
-	)
+	storeService := storeservice.New(storeRepository, storeConfig.Environment)
 	storeService.ConfigureRedemptions(redemptionCodes)
 	storeServices := &httpapi.StoreServices{
 		HuaweiIdentityAuthenticator: huaweiIdentityAuthenticator,
 		UserRepository:              storeRepository,
 		SessionManager:              auth.NewSessionManager(storeConfig.JWTSigningKey, storeConfig.SessionTTL),
 		StoreService:                storeService,
+		AccountDeleter:              storeService,
 		AccountUnionIDPepper:        storeConfig.AccountUnionIDPepper,
 	}
 

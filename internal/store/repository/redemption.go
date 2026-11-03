@@ -15,7 +15,6 @@ import (
 
 var (
 	ErrRedemptionAccountLimit        = errors.New("redemption account limit reached")
-	ErrRedemptionIAPActive           = errors.New("active IAP subscription prevents redemption")
 	ErrRedemptionIdempotencyConflict = errors.New("redemption idempotency key belongs to another code")
 	ErrRedemptionChainInvalid        = errors.New("redemption chain requires repair")
 )
@@ -99,23 +98,6 @@ func findRedemptionByIdempotency(
 	return record, true, nil
 }
 
-// HasActiveIAPSubscription checks the locally verified subscription snapshot.
-// Redeem refreshes known Huawei tokens before relying on this value.
-func (r *Repository) HasActiveIAPSubscription(ctx context.Context, userID string, now time.Time) (bool, error) {
-	var active bool
-	err := r.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM iap_subscriptions
-			WHERE user_id = $1 AND expires_at > $2
-			  AND status IN ('ACTIVE', 'CANCELED_ACTIVE')
-		)
-	`, userID, now).Scan(&active)
-	if err != nil {
-		return false, fmt.Errorf("query active IAP subscription: %w", err)
-	}
-	return active, nil
-}
-
 // ApplyRedemption atomically appends one production or accelerated test month
 // to a user's gift-pass chain. It retries only database failures for which
 // replaying the whole transaction is safe.
@@ -142,8 +124,15 @@ func (r *Repository) applyRedemptionOnce(ctx context.Context, input ApplyRedempt
 	// behind a campaign-wide counter, while same-user idempotency and chain appends
 	// remain ordered.
 	var lockedUserID string
-	if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE id = $1 FOR UPDATE`, input.UserID).Scan(&lockedUserID); err != nil {
+	var lockedStatus string
+	if err := tx.QueryRow(ctx, `SELECT id::text, status FROM users WHERE id = $1 FOR UPDATE`, input.UserID).
+		Scan(&lockedUserID, &lockedStatus); err != nil {
 		return RedemptionRecord{}, fmt.Errorf("lock redemption user: %w", err)
+	}
+	// The session check happens before this lock; an account deleted in between
+	// must not receive a grant.
+	if lockedStatus != UserStatusActive {
+		return RedemptionRecord{}, ErrUserNotActive
 	}
 	if existing, found, err := findRedemptionByIdempotency(ctx, tx, input.UserID, input.IdempotencyKey); err != nil {
 		return RedemptionRecord{}, err
@@ -155,19 +144,9 @@ func (r *Repository) applyRedemptionOnce(ctx context.Context, input ApplyRedempt
 		return existing, tx.Commit(ctx)
 	}
 
-	var iapActive bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM iap_subscriptions
-			WHERE user_id = $1 AND expires_at > $2
-			  AND status IN ('ACTIVE', 'CANCELED_ACTIVE')
-		)
-	`, input.UserID, input.Now).Scan(&iapActive); err != nil {
-		return RedemptionRecord{}, fmt.Errorf("recheck active IAP subscription: %w", err)
-	}
-	if iapActive {
-		return RedemptionRecord{}, ErrRedemptionIAPActive
-	}
+	// "No gift pass while a Huawei pass renews" is enforced on the device only:
+	// the server no longer sees purchases (accepted 2026-11-03; a bypass merely
+	// overlaps a free gift with a paid period).
 
 	// Per-account counting reuses the user lock above; this row does not create a
 	// cross-user hotspot and is therefore kept exact even though the global cap is soft.

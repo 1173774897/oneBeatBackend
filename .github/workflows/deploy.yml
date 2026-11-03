@@ -125,7 +125,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$SSH_USER@$SSH_HOST" \
-            "install -d -m 755 '$DEPLOY_ROOT' '$DEPLOY_ROOT/migrations' '$DEPLOY_ROOT/postgres/init'"
+            "rm -rf '$DEPLOY_ROOT/migrations.next' && install -d -m 755 '$DEPLOY_ROOT' '$DEPLOY_ROOT/migrations' '$DEPLOY_ROOT/migrations.next' '$DEPLOY_ROOT/postgres/init'"
 
       - name: Upload deployment configuration and migrations
         shell: bash
@@ -162,7 +162,7 @@ jobs:
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             migrations/*.sql \
-            "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/migrations/"
+            "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/migrations.next/"
 
       - name: Pull and deploy
         shell: bash
@@ -180,6 +180,12 @@ jobs:
               mv '$DEPLOY_ROOT/docker-compose.database.yml.next' '$DEPLOY_ROOT/docker-compose.database.yml'
               mv '$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh.next' '$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh'
               chmod 755 '$DEPLOY_ROOT/postgres/init/01-create-environment-databases.sh'
+              # Replace the whole directory: scp only adds files, and a migration
+              # removed from the branch must not linger and be applied later.
+              rm -rf '$DEPLOY_ROOT/migrations.prev'
+              mv '$DEPLOY_ROOT/migrations' '$DEPLOY_ROOT/migrations.prev'
+              mv '$DEPLOY_ROOT/migrations.next' '$DEPLOY_ROOT/migrations'
+              rm -rf '$DEPLOY_ROOT/migrations.prev'
               test -s '$DEPLOY_ROOT/.env.database' || {
                 echo 'Missing $DEPLOY_ROOT/.env.database; create the server-side database secrets first.' >&2
                 exit 1
