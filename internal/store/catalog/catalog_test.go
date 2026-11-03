@@ -105,3 +105,32 @@ func TestActivePassUnlocksEveryPaidCharacterAndScene(t *testing.T) {
 		t.Fatal("catalog has no paid characters or scenes")
 	}
 }
+
+// November 2026 promotion: lamp and lilroll are free from 2026-11-03 00:00
+// through the end of 2026-11-30, Beijing time.
+func TestNovemberLimitedFreeWindowBoundaries(t *testing.T) {
+	beijing := time.FixedZone("CST", 8*60*60)
+	cases := []struct {
+		at   time.Time
+		free bool
+	}{
+		{time.Date(2026, time.November, 2, 23, 59, 59, 0, beijing), false},
+		{time.Date(2026, time.November, 3, 0, 0, 0, 0, beijing), true},
+		{time.Date(2026, time.November, 30, 23, 59, 59, 0, beijing), true},
+		{time.Date(2026, time.December, 1, 0, 0, 0, 0, beijing), false},
+	}
+	for _, tc := range cases {
+		access := map[string]string{}
+		for _, item := range AnonymousBootstrap(tc.at).Items {
+			access[item.ItemKey] = item.Access.Reason
+		}
+		for _, key := range []string{"character.lamp", "character.lilroll"} {
+			if (access[key] == AccessLimitedFree) != tc.free {
+				t.Fatalf("%s at %s: reason %q, want free=%v", key, tc.at, access[key], tc.free)
+			}
+		}
+		if access["character.cloud"] != AccessLocked {
+			t.Fatalf("cloud must stay locked at %s, got %q", tc.at, access["character.cloud"])
+		}
+	}
+}

@@ -57,6 +57,17 @@ var limitedFreeWindows = []LimitedFreeWindow{
 		StartsAt: time.Date(2026, time.September, 30, 16, 0, 0, 0, time.UTC),
 		EndsAt:   time.Date(2026, time.October, 10, 16, 0, 0, 0, time.UTC),
 	},
+	// 2026-11-03 00:00 to 2026-11-30 24:00 Beijing time (UTC+8), end exclusive.
+	{
+		ItemKey:  "character.lamp",
+		StartsAt: time.Date(2026, time.November, 2, 16, 0, 0, 0, time.UTC),
+		EndsAt:   time.Date(2026, time.November, 30, 16, 0, 0, 0, time.UTC),
+	},
+	{
+		ItemKey:  "character.lilroll",
+		StartsAt: time.Date(2026, time.November, 2, 16, 0, 0, 0, time.UTC),
+		EndsAt:   time.Date(2026, time.November, 30, 16, 0, 0, 0, time.UTC),
+	},
 }
 
 // RedemptionCampaigns returns defensive copies of the compiled campaigns.

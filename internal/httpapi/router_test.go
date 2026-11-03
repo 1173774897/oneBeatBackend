@@ -171,12 +171,18 @@ func TestStoreBootstrapReturnsSafeAnonymousCatalog(t *testing.T) {
 	if data.ConfigVersion == "" || len(data.Items) != 11 {
 		t.Fatalf("unexpected bootstrap: %+v", data)
 	}
-	allowed := make(map[string]bool)
+	// The handler uses the real clock, so a live limited-free window may unlock
+	// paid items; anything else reaching an anonymous user is a leak.
 	for _, item := range data.Items {
-		allowed[item.ItemKey] = item.Access.Allowed
-	}
-	if allowed["character.lamp"] || !allowed["scene.sunset_coast"] || allowed["scene.neon_street"] {
-		t.Fatalf("unexpected anonymous access: %+v", allowed)
+		if item.ItemKey == "scene.sunset_coast" {
+			if !item.Access.Allowed {
+				t.Fatalf("default scene is locked: %+v", item)
+			}
+			continue
+		}
+		if item.Access.Allowed && item.Access.Reason != "LIMITED_FREE" {
+			t.Fatalf("paid item %q available anonymously via %q", item.ItemKey, item.Access.Reason)
+		}
 	}
 }
 

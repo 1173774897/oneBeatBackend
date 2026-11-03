@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const ConfigVersion = "2026-10-03.1"
+const ConfigVersion = "2026-11-03.1"
 
 const (
 	KindPass      = "PASS"
