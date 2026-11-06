@@ -402,8 +402,8 @@ Certbot 完成以下工作：
 
 | 环境 | 域名 | 对外端口 |
 | --- | --- | --- |
-| 测试（staging / `test` 镜像） | `onebeatapistaging.liluanxin.com` | `8443` |
-| 生产（`prod` 镜像） | `<prod-api-domain>`（与 AppGallery / 客户端 Base URL 一致） | `443` |
+| 测试（staging / `test` 镜像） | `onebeatapistaging.liluanxin.cn` | `8443` |
+| 生产（`prod` 镜像） | `onebeatapi.liluanxin.cn`（与 AppGallery / 客户端 Base URL 一致） | `443` |
 
 一个 Let’s Encrypt 证书可同时包含生产与测试两个 `-d` 域名；HTTPS 校验域名而非端口，测试环境
 使用 `8443` 不需要单独证书类型。Certbot 示例中的 `-d` 请替换为上表域名。
@@ -417,8 +417,8 @@ Git；可在服务器本地生成临时证书写入 `/opt/onebeatbackend/certs/*
 先在域名 DNS 管理页面创建记录：
 
 ```text
-onebeatapistaging.liluanxin.com   A     <OneBeat 服务器公网 IPv4>
-<prod-api-domain>                 A     <同一台 OneBeat 服务器 IPv4>
+onebeatapistaging.liluanxin.cn   A     <OneBeat 服务器公网 IPv4>
+onebeatapi.liluanxin.cn                 A     <同一台 OneBeat 服务器 IPv4>
 ```
 
 API 的 A 记录应指向 **运行 Docker 与 `/opt/onebeatbackend` 的那台 Vultr**，与代理、Clash
@@ -430,8 +430,8 @@ API 的 A 记录应指向 **运行 Docker 与 `/opt/onebeatbackend` 的那台 Vu
 在开发电脑上确认 DNS 已生效：
 
 ```bash
-dig +short onebeatapistaging.liluanxin.com A
-dig +short <prod-api-domain> A
+dig +short onebeatapistaging.liluanxin.cn A
+dig +short onebeatapi.liluanxin.cn A
 ```
 
 两个命令都应返回 OneBeat 服务器公网 IP。**Vultr 控制台 Firewall Group 与主机 UFW**（若启用）
@@ -478,8 +478,8 @@ certbot --version
 
 ```bash
 # 这三个值必须替换为真实信息。
-PROD_DOMAIN="<prod-api-domain>"
-TEST_DOMAIN="onebeatapistaging.liluanxin.com"
+PROD_DOMAIN="onebeatapi.liluanxin.cn"
+TEST_DOMAIN="onebeatapistaging.liluanxin.cn"
 LE_EMAIL="admin@example.com"
 
 # --standalone：Certbot 临时启动 HTTP 服务监听 80 端口完成域名验证。
@@ -627,13 +627,13 @@ ls -l /opt/onebeatbackend/certs/{prod,test}/*.pem
 容器启动后，在开发电脑执行：
 
 ```bash
-curl --fail --show-error https://<prod-api-domain>/healthz
-curl --fail --show-error https://onebeatapistaging.liluanxin.com:8443/healthz
+curl --fail --show-error https://onebeatapi.liluanxin.cn/healthz
+curl --fail --show-error https://onebeatapistaging.liluanxin.cn:8443/healthz
 
 # 查看生产端实际返回证书的签发者、有效期和域名列表。
 openssl s_client \
-  -connect <prod-api-domain>:443 \
-  -servername <prod-api-domain> \
+  -connect onebeatapi.liluanxin.cn:443 \
+  -servername onebeatapi.liluanxin.cn \
   </dev/null 2>/dev/null |
   openssl x509 -noout -subject -issuer -dates -ext subjectAltName
 ```
@@ -811,8 +811,8 @@ docker exec onebeat-postgres \
 `*.up.sql` 编号（当前为 **4**），`dirty` 为 `false`。随后在开发电脑检查：
 
 ```bash
-curl --fail https://onebeatapistaging.liluanxin.com:8443/healthz
-curl --fail https://onebeatapistaging.liluanxin.com:8443/api/v1/database/test
+curl --fail https://onebeatapistaging.liluanxin.cn:8443/healthz
+curl --fail https://onebeatapistaging.liluanxin.cn:8443/api/v1/database/test
 ```
 
 数据库测试接口不会返回密码或主机地址，成功响应类似：
@@ -1082,10 +1082,10 @@ git push origin master
 在 GitHub 仓库的 `Actions` 页面查看 `Build and deploy oneBeat`。发布后验证：
 
 ```bash
-curl --fail https://onebeatapistaging.liluanxin.com:8443/healthz
-curl --fail https://onebeatapistaging.liluanxin.com:8443/api/v1/database/test
-curl --fail https://<prod-api-domain>/healthz
-curl --fail https://<prod-api-domain>/api/v1/database/test
+curl --fail https://onebeatapistaging.liluanxin.cn:8443/healthz
+curl --fail https://onebeatapistaging.liluanxin.cn:8443/api/v1/database/test
+curl --fail https://onebeatapi.liluanxin.cn/healthz
+curl --fail https://onebeatapi.liluanxin.cn/api/v1/database/test
 
 ssh -i ~/.ssh/onebeat_github_actions onebeat@<OneBeat-Vultr-IP> 'docker ps'
 ssh -i ~/.ssh/onebeat_github_actions onebeat@<OneBeat-Vultr-IP> \
