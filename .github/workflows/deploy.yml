@@ -24,6 +24,7 @@ jobs:
       environment: ${{ steps.release.outputs.environment }}
       image_tag: ${{ steps.release.outputs.image_tag }}
       short_sha: ${{ steps.release.outputs.short_sha }}
+      image_pull_ref: ${{ steps.image_ref.outputs.pull_ref }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -77,8 +78,50 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Mainland ECS: pulling from ghcr.io is slow / TLS-timeout prone. Optional: copy tag to Aliyun ACR after GHCR push.
+      - name: Aliyun ACR — registry host (optional)
+        id: acr
+        if: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX != '' }}
+        env:
+          ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          echo "registry_host=${ACR_PREFIX%%/*}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Aliyun ACR (optional)
+        if: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.acr.outputs.registry_host }}
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      - name: Mirror image to Aliyun ACR (optional)
+        if: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX != '' }}
+        env:
+          ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.image_tag }}"
+          SRC="ghcr.io/${{ env.IMAGE_NAME }}:${TAG}"
+          DST="${ACR_PREFIX}:${TAG}"
+          docker buildx imagetools create --tag "$DST" "$SRC"
+
+      - name: Image reference for deploy
+        id: image_ref
+        env:
+          ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.image_tag }}"
+          if [[ -n "${ACR_PREFIX}" ]]; then
+            echo "pull_ref=${ACR_PREFIX}:${TAG}" >> "$GITHUB_OUTPUT"
+          else
+            echo "pull_ref=ghcr.io/${{ env.IMAGE_NAME }}:${TAG}" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
-    name: Deploy to Vultr
+    name: Deploy to server
     needs:
       - build
     runs-on: ubuntu-latest
@@ -194,7 +237,14 @@ jobs:
                 echo 'Missing $DEPLOY_ROOT/.env.${{ needs.build.outputs.app_env }}; create the environment DATABASE_URL first.' >&2
                 exit 1
               }
-              export ONEBEAT_IMAGE='$REGISTRY/$IMAGE_NAME:${{ needs.build.outputs.image_tag }}'
+              export ONEBEAT_IMAGE='${{ needs.build.outputs.image_pull_ref }}'
+              case \"\$ONEBEAT_IMAGE\" in
+                ghcr.io/*) ;;
+                *)
+                  REG=\"\${ONEBEAT_IMAGE%%/*}\"
+                  printf '%s\\n' '${{ secrets.ALIYUN_ACR_PASSWORD }}' | docker login \"\$REG\" -u '${{ secrets.ALIYUN_ACR_USERNAME }}' --password-stdin
+                  ;;
+              esac
               # Pull only images that resolve cleanly through mainland mirrors. The migrate
               # image is docker.io/migrate/migrate; some mirrors return 403 for it, so we
               # keep it locally (pull_policy if_not_present in compose) or load it once.
