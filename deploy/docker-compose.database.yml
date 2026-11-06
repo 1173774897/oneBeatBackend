@@ -3,6 +3,9 @@ name: onebeat-database
 services:
   postgres:
     image: postgres:17.11-alpine
+    # Pinned tag lives on docker.io, which times out from the mainland server. Reuse the
+    # local copy; after bumping the tag, pull or `docker load` it on the server once by hand.
+    pull_policy: if_not_present
     container_name: onebeat-postgres
     restart: unless-stopped
     init: true

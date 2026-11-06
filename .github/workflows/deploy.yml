@@ -268,10 +268,9 @@ jobs:
                   printf '%s\\n' '${{ secrets.ALIYUN_ACR_PASSWORD }}' | docker login \"\$REG\" -u '${{ secrets.ALIYUN_ACR_USERNAME }}' --password-stdin
                   ;;
               esac
-              # Pull only images that resolve cleanly through mainland mirrors. The migrate
-              # image is docker.io/migrate/migrate; some mirrors return 403 for it, so we
-              # keep it locally (pull_policy if_not_present in compose) or load it once.
-              docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' pull postgres
+              # Only the app image is pulled. postgres and migrate come from docker.io, which
+              # times out from the server (registry-1.docker.io), so compose reuses the local
+              # copies via pull_policy if_not_present; seed them by hand when a tag changes.
               docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' up -d --wait --wait-timeout 90
               case '${{ needs.build.outputs.compose_file }}' in
                 docker-compose.test.yml) ONEBEAT_SVC=onebeat-test ;;
