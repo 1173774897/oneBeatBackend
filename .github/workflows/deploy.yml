@@ -205,7 +205,8 @@ jobs:
                 docker-compose.prod.yml) ONEBEAT_SVC=onebeat-prod ;;
                 *) echo 'Unknown compose file for pull' >&2; exit 1 ;;
               esac
-              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration pull "$ONEBEAT_SVC"
+              # \$ escapes the runner's shell — ONEBEAT_SVC must expand on the server after case, not on GitHub.
+              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration pull \$ONEBEAT_SVC
               docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration run --rm migrate
               docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' up -d --remove-orphans --wait --wait-timeout 60
             "
