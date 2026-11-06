@@ -77,6 +77,10 @@ jobs:
             org.opencontainers.image.version=${{ steps.release.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Aliyun ACR (personal / some editions) rejects BuildKit attestations that use
+          # application/vnd.oci.empty.v1+json; imagetools copy then fails with 403 on mirror.
+          provenance: false
+          sbom: false
 
       # `if:` cannot reference `secrets.*` (workflow parser rejects it). Use a step output instead.
       - name: Detect Aliyun ACR mirror
