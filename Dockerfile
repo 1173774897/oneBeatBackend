@@ -1,8 +1,8 @@
-# syntax=docker/dockerfile:1
-
+# Base images from AWS Public ECR mirror of Docker Official Images so CI does not rely on
+# registry-1.docker.io (GitHub-hosted runners in some regions resolve it to wrong / blocked IPs).
 ARG GO_VERSION=1.24
 
-FROM golang:${GO_VERSION}-alpine AS build
+FROM public.ecr.aws/docker/library/golang:${GO_VERSION}-alpine AS build
 
 ARG APP_ENV=prod
 ARG APP_VERSION=dev
@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/onebeat-api \
     ./cmd/api
 
-FROM alpine:3.21
+FROM public.ecr.aws/docker/library/alpine:3.21
 
 ARG APP_ENV=prod
 ARG APP_VERSION=dev
