@@ -78,10 +78,23 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # `if:` cannot reference `secrets.*` (workflow parser rejects it). Use a step output instead.
+      - name: Detect Aliyun ACR mirror
+        id: acr_mirror
+        env:
+          ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACR_PREFIX}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Mainland ECS: pulling from ghcr.io is slow / TLS-timeout prone. Optional: copy tag to Aliyun ACR after GHCR push.
       - name: Aliyun ACR — registry host (optional)
         id: acr
-        if: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX != '' }}
+        if: ${{ steps.acr_mirror.outputs.enabled == 'true' }}
         env:
           ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
         run: |
@@ -89,7 +102,7 @@ jobs:
           echo "registry_host=${ACR_PREFIX%%/*}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Aliyun ACR (optional)
-        if: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX != '' }}
+        if: ${{ steps.acr_mirror.outputs.enabled == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ steps.acr.outputs.registry_host }}
@@ -97,7 +110,7 @@ jobs:
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
       - name: Mirror image to Aliyun ACR (optional)
-        if: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX != '' }}
+        if: ${{ steps.acr_mirror.outputs.enabled == 'true' }}
         env:
           ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
         run: |
