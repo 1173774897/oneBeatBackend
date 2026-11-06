@@ -24,7 +24,6 @@ jobs:
       environment: ${{ steps.release.outputs.environment }}
       image_tag: ${{ steps.release.outputs.image_tag }}
       short_sha: ${{ steps.release.outputs.short_sha }}
-      image_pull_ref: ${{ steps.image_ref.outputs.pull_ref }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -129,19 +128,6 @@ jobs:
           SRC="ghcr.io/${{ env.IMAGE_NAME }}:${TAG}"
           DST="${ACR_PREFIX}:${TAG}"
           docker buildx imagetools create --tag "$DST" "$SRC"
-
-      - name: Image reference for deploy
-        id: image_ref
-        env:
-          ACR_PREFIX: ${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.release.outputs.image_tag }}"
-          if [[ -n "${ACR_PREFIX}" ]]; then
-            echo "pull_ref=${ACR_PREFIX}:${TAG}" >> "$GITHUB_OUTPUT"
-          else
-            echo "pull_ref=ghcr.io/${{ env.IMAGE_NAME }}:${TAG}" >> "$GITHUB_OUTPUT"
-          fi
 
   deploy:
     name: Deploy to server
@@ -260,14 +246,17 @@ jobs:
                 echo 'Missing $DEPLOY_ROOT/.env.${{ needs.build.outputs.app_env }}; create the environment DATABASE_URL first.' >&2
                 exit 1
               }
-              export ONEBEAT_IMAGE='${{ needs.build.outputs.image_pull_ref }}'
-              case \"\$ONEBEAT_IMAGE\" in
-                ghcr.io/*) ;;
-                *)
-                  REG=\"\${ONEBEAT_IMAGE%%/*}\"
-                  printf '%s\\n' '${{ secrets.ALIYUN_ACR_PASSWORD }}' | docker login \"\$REG\" -u '${{ secrets.ALIYUN_ACR_USERNAME }}' --password-stdin
-                  ;;
-              esac
+              # Built here from the secret, not passed as a build job output: GitHub drops job
+              # outputs that contain a secret, and an empty image ref made `docker login ''`
+              # fall back to Docker Hub (registry-1.docker.io timeout).
+              ACR_PREFIX='${{ secrets.ALIYUN_ACR_IMAGE_PREFIX }}'
+              if [ -n \"\$ACR_PREFIX\" ]; then
+                export ONEBEAT_IMAGE=\"\$ACR_PREFIX:${{ needs.build.outputs.image_tag }}\"
+                REG=\"\${ACR_PREFIX%%/*}\"
+                printf '%s\\n' '${{ secrets.ALIYUN_ACR_PASSWORD }}' | docker login \"\$REG\" -u '${{ secrets.ALIYUN_ACR_USERNAME }}' --password-stdin
+              else
+                export ONEBEAT_IMAGE='${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build.outputs.image_tag }}'
+              fi
               # Only the app image is pulled. postgres and migrate come from docker.io, which
               # times out from the server (registry-1.docker.io), so compose reuses the local
               # copies via pull_policy if_not_present; seed them by hand when a tag changes.
