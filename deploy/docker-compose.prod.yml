@@ -48,6 +48,7 @@ services:
 
   migrate:
     image: migrate/migrate:v4.19.1
+    pull_policy: if_not_present
     profiles:
       - migration
     restart: "no"

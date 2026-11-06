@@ -150,7 +150,7 @@ Actions 只部署镜像与迁移，**不会**复制 `secrets/`；改秘密后只
 
 | 项 | 测试 staging 值 |
 | --- | --- |
-| 通知 URL | `https://onebeatapistaging.liluanxin.com:8443/api/v1/webhooks/huawei/iap` |
+| 通知 URL | `https://onebeatapistaging.liluanxin.cn:8443/api/v1/webhooks/huawei/iap` |
 | 方法 | `POST`，JSON 体 `{"jwsNotification":"..."}` |
 | 与 API 环境 | `APP_ENV=test` + `HUAWEI_IAP_ENVIRONMENT=sandbox`，勿指向生产库 |
 

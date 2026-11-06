@@ -48,6 +48,9 @@ services:
 
   migrate:
     image: migrate/migrate:v4.19.1
+    # docker.io via mainland mirrors is flaky (Hub timeout); some mirrors 403 this image.
+    # GH Actions pulls only the app image; use a locally loaded migrate image when present.
+    pull_policy: if_not_present
     profiles:
       - migration
     restart: "no"

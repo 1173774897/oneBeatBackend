@@ -195,9 +195,17 @@ jobs:
                 exit 1
               }
               export ONEBEAT_IMAGE='$REGISTRY/$IMAGE_NAME:${{ needs.build.outputs.image_tag }}'
-              docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' pull
+              # Pull only images that resolve cleanly through mainland mirrors. The migrate
+              # image is docker.io/migrate/migrate; some mirrors return 403 for it, so we
+              # keep it locally (pull_policy if_not_present in compose) or load it once.
+              docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' pull postgres
               docker compose -f '$DEPLOY_ROOT/docker-compose.database.yml' up -d --wait --wait-timeout 90
-              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration pull
+              case '${{ needs.build.outputs.compose_file }}' in
+                docker-compose.test.yml) ONEBEAT_SVC=onebeat-test ;;
+                docker-compose.prod.yml) ONEBEAT_SVC=onebeat-prod ;;
+                *) echo 'Unknown compose file for pull' >&2; exit 1 ;;
+              esac
+              docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration pull "$ONEBEAT_SVC"
               docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' --profile migration run --rm migrate
               docker compose -f '$DEPLOY_ROOT/${{ needs.build.outputs.compose_file }}' up -d --remove-orphans --wait --wait-timeout 60
             "
