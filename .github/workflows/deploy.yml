@@ -79,8 +79,9 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.release.outputs.short_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # `driver: docker` does not support `type=gha` cache export; use registry cache in GHCR.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
           # Aliyun ACR (personal / some editions) rejects BuildKit attestations that use
           # application/vnd.oci.empty.v1+json; imagetools copy then fails with 403 on mirror.
           provenance: false
