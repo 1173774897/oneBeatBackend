@@ -7,6 +7,11 @@
 - `master`：构建 `prod` 与 `prod-<短 SHA>` 镜像，部署到 Vultr 的 `443`。
 - `staging`：构建 `test` 与 `test-<短 SHA>` 镜像，部署到 Vultr 的 `8443`。
 - Registry：`ghcr.io/1173774897/onebeatbackend`。
+- **大陆机房部署（推荐）**：同一 workflow 在推送 GHCR 后，可把 **运行标签**（`test` / `prod`）复制到阿里云 ACR；ECS 上从境内 Registry 拉取，显著快于直连 `ghcr.io` 与 `pkg-containers.githubusercontent.com`。在仓库 **Settings → Secrets and variables → Actions** 增加：
+  - `ALIYUN_ACR_IMAGE_PREFIX`：不含标签，例如 `registry.cn-hangzhou.aliyuncs.com/你的命名空间/onebeatbackend`
+    - **不要**用仅 VPC 可达的域名（主机名里常见 `-vpc`、如 `crpi-…-vpc.cn-*.personal.cr.aliyuncs.com`）。GitHub Actions 跑在公网，`docker login` 会一直连不上并报超时。镜像同步请用控制台里给出的**公网** Registry 地址（例如 `registry.cn-<region>.aliyuncs.com/...`）；ECS 上拉取既可走公网也可走内网加速（在 ECS 侧另行配置）。
+  - `ALIYUN_ACR_USERNAME` / `ALIYUN_ACR_PASSWORD`：该 Registry 的登录（与 ECS 上 `docker login` 相同账号密码或临时口令）
+  未配置时仍使用 `ghcr.io/...`（依赖 ECS 已 `docker login ghcr.io` 且网络可达）。
 - 服务器目录：`/opt/onebeatbackend`。
 - 数据库：一个 PostgreSQL 17 容器，内部隔离为 `onebeat_prod` 和 `onebeat_test` 两个逻辑库。
 
